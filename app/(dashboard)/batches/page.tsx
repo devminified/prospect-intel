@@ -1,6 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase/client'
 
 interface Batch {
   id: string
@@ -21,6 +23,22 @@ export default function BatchesPage() {
   const [success, setSuccess] = useState('')
   const [batches, setBatches] = useState<Batch[]>([])
 
+  useEffect(() => {
+    loadBatches()
+  }, [])
+
+  async function loadBatches() {
+    const { data, error } = await supabase
+      .from('batches')
+      .select('id, city, category, count_requested, count_completed, status, created_at')
+      .order('created_at', { ascending: false })
+    if (error) {
+      setError(`Failed to load batches: ${error.message}`)
+      return
+    }
+    setBatches((data as Batch[]) ?? [])
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
@@ -28,11 +46,17 @@ export default function BatchesPage() {
     setSuccess('')
 
     try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const accessToken = sessionData.session?.access_token
+      if (!accessToken) {
+        throw new Error('Not signed in')
+      }
+
       const response = await fetch('/api/batches', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer temp-token', // TODO: Replace with real auth
+          'Authorization': `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
           city,
@@ -48,9 +72,8 @@ export default function BatchesPage() {
       }
 
       setSuccess(`Successfully created batch with ${data.prospects_created} prospects!`)
-      
-      // Add the new batch to the list
-      setBatches(prev => [data.batch, ...prev])
+
+      await loadBatches()
       
       // Reset form
       setCity('')
@@ -156,7 +179,7 @@ export default function BatchesPage() {
         ) : (
           <div className="divide-y divide-gray-200">
             {batches.map((batch) => (
-              <div key={batch.id} className="p-6">
+              <Link key={batch.id} href={`/batches/${batch.id}`} className="block p-6 hover:bg-gray-50 transition-colors">
                 <div className="flex justify-between items-start">
                   <div>
                     <h3 className="font-medium text-gray-900">
@@ -187,7 +210,7 @@ export default function BatchesPage() {
                     </p>
                   </div>
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
         )}

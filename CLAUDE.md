@@ -19,7 +19,7 @@ You are building **Prospect Intel**, a cold-outreach tool for a dev + AI automat
 
 ## 1. What We're Building (plain English)
 
-User logs in → picks a city + business category (e.g., "restaurants in Austin") + a count → the app pulls that many businesses from Google Places, visits each website, extracts tech signals (no booking system? no chat? no e-commerce?), asks Claude to identify specific operational pain points, then asks Claude to write a custom 4-sentence cold email per prospect. The user reviews the emails in a dashboard, edits if needed, copies the approved ones, and pastes them into Instantly/Smartlead for sending. That's the whole product.
+User logs in → picks a city + business category (e.g., "restaurants in Austin") + a count → the app pulls that many businesses from HERE Maps, visits each website, extracts tech signals (no booking system? no chat? no e-commerce?), asks Claude to identify specific operational pain points, then asks Claude to write a custom 4-sentence cold email per prospect. The user reviews the emails in a dashboard, edits if needed, copies the approved ones, and pastes them into Instantly/Smartlead for sending. That's the whole product.
 
 The magic is **evidence-backed specificity**: every pitch must reference something concrete about that specific business, not generic agency fluff.
 
@@ -32,7 +32,7 @@ The magic is **evidence-backed specificity**: every pitch must reference somethi
 | Framework       | Next.js 14 (App Router), TypeScript, Tailwind                                              |
 | Hosting         | Vercel                                                                                     |
 | DB + Auth       | Supabase (Postgres + Supabase Auth)                                                        |
-| Prospect source | Google Places API (New) — Text Search + Place Details                                      |
+| Prospect source | HERE Maps API — Geocode + Discover + Lookup                                                |
 | Scraping        | Native `fetch` + `cheerio` (NO Playwright, NO Puppeteer)                                   |
 | LLM             | `@anthropic-ai/sdk` — Haiku 4.5 for analysis, Sonnet 4.6 for pitches                       |
 | Background jobs | Vercel Cron hitting `/api/cron/process` every 2 min                                        |
@@ -51,7 +51,7 @@ Model strings (use exactly these):
 
 - Supabase auth (email/password), single user for now
 - Batch creation: city + category + count
-- Google Places fetch → write `prospects` rows
+- HERE Maps fetch → write `prospects` rows
 - Website enrichment via fetch + Cheerio
 - Claude analysis → structured pain points JSON
 - Claude pitch generation → subject + body
@@ -96,7 +96,7 @@ Next.js on Vercel (one app)
   Supabase (Postgres + Auth)
        │
        ▼
-  External: Google Places API, Anthropic API
+  External: HERE Maps API, Anthropic API
 ```
 
 Key constraint: **every job processes ONE prospect and must finish in under 30 seconds.** Never loop over a batch inside one request.
@@ -129,7 +129,7 @@ create table prospects (
   phone text,
   website text,
   email text,
-  google_place_id text unique,
+  place_id text unique,
   rating numeric,
   review_count int,
   hours_json jsonb,
@@ -227,7 +227,7 @@ prospect-intel/
 │   ├── supabase/
 │   │   ├── server.ts               ← server-side client
 │   │   └── client.ts               ← browser client
-│   ├── places.ts                   ← Google Places API wrapper
+│   ├── places.ts                   ← HERE Maps API wrapper
 │   ├── enrich.ts                   ← fetch + cheerio signal extraction
 │   ├── analyze.ts                  ← Claude Haiku call
 │   ├── pitch.ts                    ← Claude Sonnet call
@@ -251,7 +251,7 @@ Put these in `.env.local.example` with empty values. Never commit real keys.
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=       # server only, never exposed to browser
-GOOGLE_PLACES_API_KEY=
+HERE_API_KEY=
 ANTHROPIC_API_KEY=
 CRON_SECRET=                     # random string; check in cron route
 ```
@@ -372,7 +372,7 @@ BUSINESS
 - Name: {name}
 - Category: {category}
 - City: {city}
-- Google rating: {rating} ({review_count} reviews)
+- Rating: {rating} ({review_count} reviews)
 - Hours: {hours}
 
 WEBSITE SIGNALS (JSON)

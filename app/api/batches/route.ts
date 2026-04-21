@@ -11,21 +11,21 @@ interface CreateBatchRequest {
 
 export async function POST(request: NextRequest) {
   try {
-    // Get the user from the session
     const authHeader = request.headers.get('authorization')
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // For now, we'll extract user ID from a simple token
-    // In production, this should validate the JWT properly
     const token = authHeader.replace('Bearer ', '')
-    
-    // Parse request body
+    const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token)
+    if (userError || !userData?.user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    const userId = userData.user.id
+
     const body: CreateBatchRequest = await request.json()
     const { city, category, count } = body
 
-    // Validate input
     if (!city || !category || !count || count <= 0 || count > 50) {
       return NextResponse.json(
         { error: 'Invalid input. City, category required. Count must be 1-50.' },
@@ -33,11 +33,6 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // For MVP, we'll use a hardcoded user ID
-    // TODO: Replace with proper JWT validation
-    const userId = '00000000-0000-0000-0000-000000000000'
-
-    // Create batch
     const { data: batch, error: batchError } = await supabaseAdmin
       .from('batches')
       .insert({
@@ -55,23 +50,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to create batch' }, { status: 500 })
     }
 
-    // Search for places
-    const searchQuery = `${category} in ${city}`
     let places
-
     try {
-      places = await searchPlaces(searchQuery)
+      places = await searchPlaces(category, city)
     } catch (error) {
       console.error('Error searching places:', error)
-      
-      // Mark batch as failed
+
       await supabaseAdmin
         .from('batches')
         .update({ status: 'failed' })
         .eq('id', batch.id)
 
       return NextResponse.json(
-        { error: 'Failed to fetch places from Google' },
+        { error: 'Failed to fetch places from HERE' },
         { status: 500 }
       )
     }
@@ -112,7 +103,7 @@ export async function POST(request: NextRequest) {
             address: place.formatted_address || details?.formatted_address,
             phone: details?.formatted_phone_number,
             website: details?.website,
-            google_place_id: place.place_id,
+            place_id: place.place_id,
             rating: place.rating || details?.rating,
             review_count: place.user_ratings_total || details?.user_ratings_total,
             hours_json: details?.opening_hours || place.opening_hours,
@@ -141,22 +132,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Update batch with completed count
-    await supabaseAdmin
-      .from('batches')
-      .update({ 
-        count_completed: prospects.length,
-        status: prospects.length > 0 ? 'processing' : 'done'
-      })
-      .eq('id', batch.id)
+    if (prospects.length === 0) {
+      await supabaseAdmin
+        .from('batches')
+        .update({ status: 'done' })
+        .eq('id', batch.id)
+    }
 
     return NextResponse.json({
-      batch: {
-        ...batch,
-        count_completed: prospects.length
-      },
+      batch,
       prospects_created: prospects.length,
-      message: `Created ${prospects.length} prospects and queued enrichment jobs`
+      message: `Created ${prospects.length} prospects and queued enrichment jobs`,
     })
 
   } catch (error) {

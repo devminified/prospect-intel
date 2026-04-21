@@ -60,7 +60,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
       return
     }
 
-    const sorted = ((p as Prospect[]) ?? []).sort((a, b) => {
+    const sorted = ((p as unknown as Prospect[]) ?? []).sort((a, b) => {
       const sa = a.analyses?.opportunity_score ?? -1
       const sb = b.analyses?.opportunity_score ?? -1
       return sb - sa

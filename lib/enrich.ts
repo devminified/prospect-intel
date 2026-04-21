@@ -58,32 +58,36 @@ export async function enrichProspect(prospectId: string): Promise<void> {
     return
   }
 
-  let url = prospect.website
-  if (!url.startsWith('http://') && !url.startsWith('https://')) {
-    url = `https://${url}`
-  }
+  const rawUrl = prospect.website
+  const withoutScheme = rawUrl.replace(/^https?:\/\//, '')
+  const httpsUrl = `https://${withoutScheme}`
+  const httpUrl = `http://${withoutScheme}`
 
   let html: string | null = null
   let status: number | null = null
   let fetchError: string | null = null
   let sslValid = false
+  let finalUrl: string | null = null
 
-  try {
-    const response = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ProspectIntelBot/1.0)' },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      redirect: 'follow',
-    })
-    status = response.status
-    sslValid = url.startsWith('https://') && response.ok
-    if (response.ok) {
-      html = await response.text()
+  const httpsResult = await tryFetch(httpsUrl)
+  if (httpsResult.ok) {
+    html = httpsResult.html
+    status = httpsResult.status
+    sslValid = true
+    finalUrl = httpsUrl
+  } else {
+    const httpResult = await tryFetch(httpUrl)
+    if (httpResult.ok) {
+      html = httpResult.html
+      status = httpResult.status
+      sslValid = false
+      finalUrl = httpUrl
     } else {
-      fetchError = `HTTP ${response.status}`
+      status = httpsResult.status ?? httpResult.status
+      fetchError = httpsResult.error ?? httpResult.error ?? 'fetch failed'
     }
-  } catch (error: any) {
-    fetchError = error?.name === 'TimeoutError' ? 'timeout' : (error?.message ?? 'fetch failed')
   }
+  void finalUrl
 
   const techStack: TechStack = {
     has_website: true,
@@ -182,6 +186,31 @@ export async function enrichProspect(prospectId: string): Promise<void> {
   })
 
   await markProspectEnriched(prospectId, prospect.batch_id)
+}
+
+interface FetchOutcome {
+  ok: boolean
+  html: string | null
+  status: number | null
+  error: string | null
+}
+
+async function tryFetch(url: string): Promise<FetchOutcome> {
+  try {
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ProspectIntelBot/1.0)' },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      redirect: 'follow',
+    })
+    if (!response.ok) {
+      return { ok: false, html: null, status: response.status, error: `HTTP ${response.status}` }
+    }
+    const html = await response.text()
+    return { ok: true, html, status: response.status, error: null }
+  } catch (err: any) {
+    const msg = err?.name === 'TimeoutError' ? 'timeout' : (err?.message ?? 'fetch failed')
+    return { ok: false, html: null, status: null, error: msg }
+  }
 }
 
 async function writeEnrichment(row: EnrichmentRow): Promise<void> {

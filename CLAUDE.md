@@ -478,3 +478,243 @@ The MVP is done when all of the following are true:
 - [ ] The code is under 3000 lines across all files. (If it's more, you over-engineered — simplify.)
 
 Now open this file again, re-read §0, and begin at §8 Milestone 1.
+
+---
+
+## 14. Phase 2 Extensions (M11–M15)
+
+Phase 1 (M1–M10) is sealed. Phase 2 turns this from an MVP pitch generator into an account-based prospect intelligence tool: reliable discovery, decision-maker contact info, and a full digital visibility audit per account.
+
+### 14.0 What changes vs Phase 1
+
+- **Prospect source** switches from HERE to **Google Places API (New)**. HERE returned 3 results for "med spas in Austin" during M10 dogfood — unusable for real outreach volume.
+- **Website scraping** adds a **ScrapingBee** fallback when `fetch + Cheerio` returns <500 chars of homepage text, so JS-rendered sites (Wix, Squarespace, Shopify) get real content.
+- **New module: contact enrichment** via **Apollo.io** — decision maker, title, verified email, LinkedIn, phone. One `contacts` row per person; `is_primary` flag picks the one to pitch to.
+- **New module: visibility audit** — Google Business Profile reviews, social handles + follower counts, SerpApi rank for `<category> <city>`, Meta Ads Library presence, Google News mentions. One `visibility_audits` row per prospect.
+- **LLM provider** stays **Anthropic** for analyze + pitch (M10 proved quality); **Groq (Llama 3.3 70B)** is added for bulk summarization in the visibility audit (~20x cheaper than Sonnet, quality sufficient).
+
+### 14.1 Updated Tech Stack (additions)
+
+| Layer                 | Tool                                                                |
+| --------------------- | ------------------------------------------------------------------- |
+| Prospect source       | Google Places API (New) — Text Search + Place Details               |
+| JS-rendered scraping  | ScrapingBee — fallback when Cheerio text excerpt < 500 chars        |
+| Contact enrichment    | Apollo.io — People Search + Email Finder                            |
+| Search rank           | SerpApi — organic rank for category + brand queries                 |
+| Social audience       | Meta Graph API (public endpoints), direct Instagram scrape fallback |
+| Ad transparency       | Meta Ad Library API                                                 |
+| Press mentions        | Google News via SerpApi                                             |
+| Bulk summarization    | Groq — `llama-3.3-70b-versatile` (used only in visibility audit)    |
+
+HERE is removed. `lib/places.ts` is rewritten against Google Places.
+
+### 14.2 Updated Env Vars
+
+Add to `.env.local.example`:
+
+```
+GOOGLE_PLACES_API_KEY=
+SCRAPINGBEE_API_KEY=
+APOLLO_API_KEY=
+SERPAPI_KEY=
+GROQ_API_KEY=
+META_ACCESS_TOKEN=           # app access token for public Meta endpoints
+```
+
+Remove `HERE_API_KEY`.
+
+### 14.3 New Data Model
+
+Add a migration `0003_phase2.sql`:
+
+```sql
+create table contacts (
+  id uuid primary key default gen_random_uuid(),
+  prospect_id uuid not null references prospects(id) on delete cascade,
+  full_name text,
+  title text,
+  seniority text,            -- owner | c_suite | vp | director | manager | other
+  department text,
+  email text,
+  email_confidence text,     -- verified | guessed | unverified
+  phone text,
+  linkedin_url text,
+  apollo_person_id text,
+  is_primary boolean not null default false,
+  created_at timestamptz not null default now()
+);
+create index on contacts(prospect_id, is_primary);
+
+create table visibility_audits (
+  id uuid primary key default gen_random_uuid(),
+  prospect_id uuid not null unique references prospects(id) on delete cascade,
+  gmb_rating numeric,
+  gmb_review_count int,
+  gmb_review_highlights_json jsonb,
+  gmb_photo_count int,
+  social_links_json jsonb,            -- { instagram, facebook, tiktok, linkedin, x }
+  instagram_followers int,
+  facebook_followers int,
+  serp_rank_main int,                 -- rank for "<category> <city>"
+  serp_rank_brand int,                -- rank for "<business name>"
+  meta_ads_running boolean,
+  meta_ads_count int,
+  meta_ads_sample_json jsonb,
+  press_mentions_count int,
+  press_mentions_sample_json jsonb,
+  visibility_summary text,            -- Groq-generated narrative
+  audited_at timestamptz
+);
+```
+
+Enable RLS on both. Policies mirror §5 — a user can access rows that chain back to a batch they own.
+
+Extend `jobs.job_type` to include `find_contacts` and `audit_visibility`. No schema migration needed — `text not null` column already accepts new values.
+
+### 14.4 Pipeline Flow
+
+```
+enrich → analyze → find_contacts → audit_visibility → pitch
+```
+
+All five stages are sequential per prospect. The cron processor (unchanged in behavior) chains: on success of stage N, enqueue stage N+1. Retry/failure semantics unchanged (3 attempts, then `failed`).
+
+Pitch prompt now receives the primary contact's name + title and the visibility summary as additional context. The resulting email addresses the person by name where available.
+
+### 14.5 Folder Additions
+
+```
+lib/
+├── places.ts              ← rewritten for Google Places
+├── enrich.ts              ← adds ScrapingBee fallback
+├── contacts.ts            ← NEW: Apollo lookup, writes contacts rows
+├── audit.ts               ← NEW: visibility signals + Groq summary
+├── llm/
+│   ├── anthropic.ts       ← existing analyze + pitch calls
+│   └── groq.ts            ← NEW: cheap summarization only
+└── prompts.ts             ← new prompts per §14.8
+```
+
+### 14.6 Milestone Plan
+
+Each milestone ends with: commit, push, verify Vercel deploy is green, manually test one real prospect end-to-end.
+
+#### M11 — Google Places + ScrapingBee (Phase A)
+
+- Rewrite `lib/places.ts` against Google Places API (New). Text Search returns up to 60 via pagination; use Place Details for website/phone/hours/rating/review_count.
+- Update `.env.local.example` (remove HERE, add Google + ScrapingBee).
+- Add a ScrapingBee helper in `lib/enrich.ts`: if the Cheerio text excerpt is under 500 chars after stripping scripts/styles, re-fetch via ScrapingBee with `render_js=true` and re-parse.
+- ✅ Verify: Austin "med spas" returns ≥ 15 real prospects. Homepage excerpts for Wix / Squarespace / Shopify sites come back with real body text.
+
+#### M12 — Contact enrichment (Phase B)
+
+- `lib/contacts.ts`: `findContacts(prospectId)` — calls Apollo People Search scoped to the prospect's company (by website domain). Writes up to 5 `contacts` rows. Marks the most senior decision-maker (owner / C-suite / VP in that order of preference) as `is_primary = true`.
+- New job type `find_contacts`. Cron chains: `analyze → find_contacts`.
+- ✅ Verify: a real Austin med spa gets at least 1 contact row with a verified email and LinkedIn URL.
+
+#### M13 — Visibility audit (Phase C)
+
+- `lib/audit.ts`: `auditVisibility(prospectId)` — parallelizes 5 external calls:
+  - GMB details from Google Places Details (already fetched in M11; cached).
+  - Social link discovery: parse homepage HTML for `instagram.com`, `facebook.com`, `tiktok.com`, `linkedin.com/company`, `x.com` URLs.
+  - SerpApi: two searches — `"<category> in <city>"` and `"<business name>"`. Extract organic rank.
+  - Meta Ad Library: query by Page ID (if we can discover it from the FB URL) or by `search_terms=<business_name>`. Extract ads running count.
+  - Google News via SerpApi: search `<business_name>`. Collect top 5 press mentions.
+- After the 5 parallel calls settle, send a single Groq prompt (see §14.8.3) to produce a one-paragraph `visibility_summary`.
+- New job type `audit_visibility`. Cron chains: `find_contacts → audit_visibility`.
+- ✅ Verify: a real Austin med spa gets an audit row with non-null values for ≥ 3 of the 5 categories and a readable summary.
+
+#### M14 — UI + updated CSV (Phase D)
+
+- Extend `/prospects/[id]` with two new panels (or a tabbed layout):
+  - **Contacts**: table of contacts with name/title/seniority/email/LinkedIn. Highlight the primary.
+  - **Visibility**: GMB stars + reviews, social icons with follower counts, rank badges, ads-running indicator, summary paragraph.
+- Update pitch prompt to reference the primary contact and visibility summary (see §14.8.2).
+- Extend CSV export: add columns `contact_name`, `contact_title`, `contact_email`, `contact_linkedin`, `opportunity_score`, `gmb_rating`, `gmb_review_count`, `primary_social`.
+- ✅ Verify: export a real batch; the CSV has the new columns populated and the pitch addresses the primary contact by name.
+
+#### M15 — LLM provider abstraction + Groq
+
+- `lib/llm/anthropic.ts` and `lib/llm/groq.ts`. Both expose `generateStructured({model, schema, prompt, temperature})`.
+- `lib/analyze.ts` and `lib/pitch.ts` import from `lib/llm/anthropic.ts` (behavior unchanged).
+- `lib/audit.ts` imports `lib/llm/groq.ts` for the visibility summary.
+- ✅ Verify: audit summary generates via Groq; analysis + pitch still go through Anthropic. Monthly spend aligns with the budget in §14.9.
+
+### 14.7 Definition of Done (Phase 2)
+
+Phase 2 is done when:
+
+- [ ] A batch of 20 real businesses produces, for each one: enrichment, analysis, ≥ 1 contact row, visibility audit row, and a pitch that addresses the primary contact by name.
+- [ ] The pitch references at least one fact from the visibility audit (e.g. "your 4.8-star GMB rating with 127 reviews" or "I see you've been running Meta ads for …").
+- [ ] CSV export includes all Phase 2 columns and round-trips cleanly into Google Sheets.
+- [ ] Monthly spend at 1000 prospects/month stays under **$550** (target: $450).
+- [ ] Total code including Phase 2 stays under **5000 lines** across all files.
+
+### 14.8 Prompts (additions / updates)
+
+Put all three in `lib/prompts.ts`.
+
+#### 14.8.1 Contact selection (Anthropic Haiku, temperature 0)
+
+Only needed if Apollo returns multiple candidates and none are clearly the owner. In that case, feed the Haiku the candidate list and let it pick the best contact. Most of the time, skip this prompt and choose by a deterministic rule in `lib/contacts.ts`: `owner > c_suite > vp > director > manager > other`.
+
+#### 14.8.2 Pitch prompt (update, Sonnet)
+
+Add two new placeholders to the existing pitch prompt:
+
+```
+CONTACT (if known, lead with their first name): {contact_first_name} ({contact_title})
+VISIBILITY SNAPSHOT: {visibility_summary}
+```
+
+New rule:
+
+- If `{contact_first_name}` is present, open with "Hey {first_name} —" instead of "Hey —".
+- Use the visibility snapshot only if it contains a specific, strong signal (high review count, active ads, top-3 rank). If it's generic, ignore it. Do not list signals just because they exist.
+
+#### 14.8.3 Visibility summary prompt (Groq Llama 3.3 70B, temperature 0.3)
+
+```
+Summarize this small business's digital footprint in 2-3 sentences. Be factual.
+Do not editorialize, do not mention strengths vs weaknesses. State what's there.
+
+BUSINESS: {name} ({category}, {city})
+
+GMB: rating {gmb_rating} ({gmb_review_count} reviews, {gmb_photo_count} photos)
+TOP REVIEW EXCERPTS: {gmb_review_highlights}
+SOCIAL: {social_links_json}
+FOLLOWERS: IG {instagram_followers}, FB {facebook_followers}
+SEARCH: rank {serp_rank_main} for "{category} in {city}", rank {serp_rank_brand} for own brand
+ADS: {meta_ads_count} Meta ads currently running
+PRESS: {press_mentions_count} news mentions in the last 90 days
+
+Return plain text, no formatting, no preamble.
+```
+
+### 14.9 Budget expectations
+
+At 1000 prospects/month:
+
+| Component       | Cost    |
+| --------------- | ------- |
+| Google Places   | ~$34    |
+| ScrapingBee     | $49     |
+| Apollo.io       | ~$270   |
+| SerpApi         | $50     |
+| Anthropic       | ~$100   |
+| Groq            | ~$5     |
+| **Total**       | **~$510** |
+
+Of this, ~$180 is fixed platform fees that don't scale with volume. Cost per prospect variable ≈ $0.40.
+
+### 14.10 Phase 2 out-of-scope (still)
+
+Don't build in Phase 2:
+
+- LinkedIn scraping beyond what Apollo returns. Enterprise / ToS risk.
+- Ahrefs or SEMrush deep SEO (overkill for outbound; SerpApi is enough).
+- Auto-sending emails. User still pastes into Instantly / Smartlead manually.
+- Multi-tenant / teams. Single-user stays.
+- CRM bidirectional sync. CSV export stays the handoff.
+- Non-US markets, non-English pitch generation. Revisit in Phase 3 if needed.
+

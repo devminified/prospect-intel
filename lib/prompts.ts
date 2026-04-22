@@ -1,3 +1,52 @@
+export interface VisibilityPromptInput {
+  name: string
+  category: string
+  city: string
+  gmb_rating: number | null
+  gmb_review_count: number | null
+  gmb_photo_count: number | null
+  gmb_review_highlights: string[]
+  social_links: Record<string, string | null>
+  instagram_followers: number | null
+  facebook_followers: number | null
+  serp_rank_main: number | null
+  serp_rank_brand: number | null
+  meta_ads_count: number | null
+  press_mentions_count: number | null
+}
+
+export function visibilitySummaryPrompt(i: VisibilityPromptInput): string {
+  const social = Object.entries(i.social_links)
+    .filter(([, url]) => url)
+    .map(([k, url]) => `${k}: ${url}`)
+    .join(', ') || 'none detected'
+  const highlights = i.gmb_review_highlights.length
+    ? i.gmb_review_highlights.slice(0, 3).map((h) => `"${h}"`).join(' / ')
+    : 'none available'
+  const rating = i.gmb_rating != null ? `${i.gmb_rating}` : 'unknown'
+  const reviewCount = i.gmb_review_count ?? 0
+  const photoCount = i.gmb_photo_count ?? 0
+  const rankMain = i.serp_rank_main != null ? `#${i.serp_rank_main}` : 'not in top 20'
+  const rankBrand = i.serp_rank_brand != null ? `#${i.serp_rank_brand}` : 'not ranking'
+  const adsCount = i.meta_ads_count != null ? i.meta_ads_count : 'unknown'
+  const pressCount = i.press_mentions_count ?? 0
+
+  return `Summarize this small business's digital footprint in 2-3 sentences. Be factual.
+Do not editorialize, do not mention strengths vs weaknesses. State what's there.
+
+BUSINESS: ${i.name} (${i.category}, ${i.city})
+
+GMB: rating ${rating} (${reviewCount} reviews, ${photoCount} photos)
+TOP REVIEW EXCERPTS: ${highlights}
+SOCIAL: ${social}
+FOLLOWERS: IG ${i.instagram_followers ?? 'unknown'}, FB ${i.facebook_followers ?? 'unknown'}
+SEARCH: rank ${rankMain} for "${i.category} in ${i.city}", rank ${rankBrand} for own brand
+ADS: ${adsCount} Meta ads currently running
+PRESS: ${pressCount} news mentions in the last 90 days
+
+Return plain text, no formatting, no preamble.`
+}
+
 export interface PitchPromptInput {
   name: string
   category: string

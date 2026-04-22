@@ -24,6 +24,23 @@ interface Contact {
   is_primary: boolean
 }
 
+interface Audit {
+  gmb_rating: number | null
+  gmb_review_count: number | null
+  gmb_photo_count: number | null
+  gmb_review_highlights_json: string[] | null
+  social_links_json: Record<string, string | null> | null
+  instagram_followers: number | null
+  facebook_followers: number | null
+  serp_rank_main: number | null
+  serp_rank_brand: number | null
+  meta_ads_running: boolean | null
+  meta_ads_count: number | null
+  press_mentions_count: number | null
+  press_mentions_sample_json: Array<{ title: string; source?: string; link?: string; date?: string }> | null
+  visibility_summary: string | null
+}
+
 interface Detail {
   prospect: {
     id: string
@@ -60,6 +77,7 @@ interface Detail {
     status: string
   } | null
   contacts: Contact[]
+  audit: Audit | null
 }
 
 const PROSPECT_STATUSES = ['new', 'enriched', 'analyzed', 'ready', 'contacted', 'replied', 'rejected']
@@ -82,12 +100,13 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
     setLoading(true)
     setError('')
 
-    const [pRes, eRes, aRes, pitchRes, cRes] = await Promise.all([
+    const [pRes, eRes, aRes, pitchRes, cRes, vRes] = await Promise.all([
       supabase.from('prospects').select('*').eq('id', id).single(),
       supabase.from('enrichments').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('analyses').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('pitches').select('subject, body, edited_body, status').eq('prospect_id', id).maybeSingle(),
       supabase.from('contacts').select('id, full_name, title, seniority, department, email, email_confidence, linkedin_url, is_primary').eq('prospect_id', id),
+      supabase.from('visibility_audits').select('*').eq('prospect_id', id).maybeSingle(),
     ])
 
     if (pRes.error) {
@@ -102,6 +121,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       analysis: (aRes.data as any) ?? null,
       pitch: (pitchRes.data as any) ?? null,
       contacts: (cRes.data as Contact[]) ?? [],
+      audit: (vRes.data as Audit) ?? null,
     }
     setDetail(d)
     setEditedBody(d.pitch?.edited_body ?? d.pitch?.body ?? '')
@@ -173,7 +193,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   if (error && !detail) return <div className="text-red-600">{error}</div>
   if (!detail) return <div className="text-gray-500">Not found.</div>
 
-  const { prospect, enrichment, analysis, pitch, contacts } = detail
+  const { prospect, enrichment, analysis, pitch, contacts, audit } = detail
   const sortedContacts = [...contacts].sort((a, b) => {
     if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1
     return seniorityRank(a.seniority) - seniorityRank(b.seniority)
@@ -379,6 +399,98 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
         </div>
       </div>
 
+      {/* Visibility audit — full width below the 3-panel grid */}
+      {audit && (
+        <div className="mt-6 bg-white rounded-lg shadow p-5">
+          <h2 className="text-base font-semibold text-gray-900 mb-3">Digital visibility</h2>
+
+          {audit.visibility_summary && (
+            <p className="mb-4 p-3 bg-indigo-50 rounded text-sm text-indigo-900 leading-relaxed">
+              {audit.visibility_summary}
+            </p>
+          )}
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+            <Stat
+              label="GMB rating"
+              value={audit.gmb_rating != null ? `${audit.gmb_rating}★` : '—'}
+              sub={audit.gmb_review_count != null ? `${audit.gmb_review_count} reviews` : undefined}
+            />
+            <Stat
+              label="Rank — category"
+              value={audit.serp_rank_main != null ? `#${audit.serp_rank_main}` : 'not top 20'}
+              sub="in Google"
+            />
+            <Stat
+              label="Rank — brand"
+              value={audit.serp_rank_brand != null ? `#${audit.serp_rank_brand}` : 'not ranking'}
+              sub="own name"
+            />
+            <Stat
+              label="Press mentions"
+              value={audit.press_mentions_count != null ? `${audit.press_mentions_count}` : '—'}
+              sub="Google News"
+            />
+          </div>
+
+          {audit.social_links_json && Object.keys(audit.social_links_json).length > 0 && (
+            <div className="mb-4">
+              <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Social presence</div>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(audit.social_links_json)
+                  .filter(([, url]) => url)
+                  .map(([platform, url]) => (
+                    <a
+                      key={platform}
+                      href={url as string}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs text-gray-800"
+                    >
+                      <span className="capitalize font-medium">{platform}</span>
+                      <span className="text-gray-500">↗</span>
+                    </a>
+                  ))}
+              </div>
+            </div>
+          )}
+
+          {audit.meta_ads_running != null && (
+            <div className="mb-4 text-sm">
+              <span className="text-xs font-semibold text-gray-500 uppercase mr-2">Meta ads:</span>
+              {audit.meta_ads_running ? (
+                <span className="text-green-700 font-medium">
+                  running ({audit.meta_ads_count} active)
+                </span>
+              ) : (
+                <span className="text-gray-500">not running</span>
+              )}
+            </div>
+          )}
+
+          {audit.press_mentions_sample_json && audit.press_mentions_sample_json.length > 0 && (
+            <div>
+              <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Recent mentions</div>
+              <ul className="space-y-1 text-sm">
+                {audit.press_mentions_sample_json.slice(0, 5).map((m, i) => (
+                  <li key={i}>
+                    <a
+                      href={m.link}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-indigo-600 hover:underline line-clamp-1"
+                    >
+                      {m.title}
+                    </a>
+                    {m.source && <span className="text-xs text-gray-500 ml-2">— {m.source}</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Executives panel — full width below the 3-panel grid */}
       <div className="mt-6 bg-white rounded-lg shadow p-5">
         <div className="flex items-baseline justify-between mb-3">
@@ -485,6 +597,16 @@ function Row({ label, children }: { label: string; children: any }) {
     <div className="flex justify-between gap-2">
       <dt className="text-xs font-semibold text-gray-500 uppercase shrink-0">{label}</dt>
       <dd className="text-right">{children}</dd>
+    </div>
+  )
+}
+
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="bg-gray-50 rounded p-3">
+      <div className="text-xs font-semibold text-gray-500 uppercase">{label}</div>
+      <div className="mt-1 text-xl font-bold text-gray-900">{value}</div>
+      {sub && <div className="text-xs text-gray-500">{sub}</div>}
     </div>
   )
 }

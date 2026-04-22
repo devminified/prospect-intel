@@ -12,6 +12,18 @@ interface PainPoint {
   impact: string
 }
 
+interface Contact {
+  id: string
+  full_name: string | null
+  title: string | null
+  seniority: string | null
+  department: string | null
+  email: string | null
+  email_confidence: string | null
+  linkedin_url: string | null
+  is_primary: boolean
+}
+
 interface Detail {
   prospect: {
     id: string
@@ -47,6 +59,7 @@ interface Detail {
     edited_body: string | null
     status: string
   } | null
+  contacts: Contact[]
 }
 
 const PROSPECT_STATUSES = ['new', 'enriched', 'analyzed', 'ready', 'contacted', 'replied', 'rejected']
@@ -69,11 +82,12 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
     setLoading(true)
     setError('')
 
-    const [pRes, eRes, aRes, pitchRes] = await Promise.all([
+    const [pRes, eRes, aRes, pitchRes, cRes] = await Promise.all([
       supabase.from('prospects').select('*').eq('id', id).single(),
       supabase.from('enrichments').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('analyses').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('pitches').select('subject, body, edited_body, status').eq('prospect_id', id).maybeSingle(),
+      supabase.from('contacts').select('id, full_name, title, seniority, department, email, email_confidence, linkedin_url, is_primary').eq('prospect_id', id),
     ])
 
     if (pRes.error) {
@@ -87,6 +101,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       enrichment: (eRes.data as any) ?? null,
       analysis: (aRes.data as any) ?? null,
       pitch: (pitchRes.data as any) ?? null,
+      contacts: (cRes.data as Contact[]) ?? [],
     }
     setDetail(d)
     setEditedBody(d.pitch?.edited_body ?? d.pitch?.body ?? '')
@@ -158,7 +173,11 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   if (error && !detail) return <div className="text-red-600">{error}</div>
   if (!detail) return <div className="text-gray-500">Not found.</div>
 
-  const { prospect, enrichment, analysis, pitch } = detail
+  const { prospect, enrichment, analysis, pitch, contacts } = detail
+  const sortedContacts = [...contacts].sort((a, b) => {
+    if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1
+    return seniorityRank(a.seniority) - seniorityRank(b.seniority)
+  })
   const techStack = (enrichment?.tech_stack_json as any) ?? {}
   const painPoints = (analysis?.pain_points_json as PainPoint[] | null) ?? []
 
@@ -359,8 +378,106 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
           )}
         </div>
       </div>
+
+      {/* Executives panel — full width below the 3-panel grid */}
+      <div className="mt-6 bg-white rounded-lg shadow p-5">
+        <div className="flex items-baseline justify-between mb-3">
+          <h2 className="text-base font-semibold text-gray-900">Executives & contacts</h2>
+          <span className="text-xs text-gray-500">{sortedContacts.length} discovered via Apollo</span>
+        </div>
+        {sortedContacts.length === 0 ? (
+          <p className="text-sm text-gray-400">No contacts found.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-semibold text-gray-500 uppercase">
+                  <th className="py-2 pr-4">Name</th>
+                  <th className="py-2 pr-4">Title</th>
+                  <th className="py-2 pr-4">Level</th>
+                  <th className="py-2 pr-4">Email</th>
+                  <th className="py-2 pr-4">LinkedIn</th>
+                  <th className="py-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {sortedContacts.map((c) => (
+                  <tr key={c.id} className={c.is_primary ? 'bg-indigo-50/40' : ''}>
+                    <td className="py-2 pr-4 font-medium text-gray-900">{c.full_name ?? '—'}</td>
+                    <td className="py-2 pr-4 text-gray-700">{c.title ?? '—'}</td>
+                    <td className="py-2 pr-4">
+                      <SeniorityChip seniority={c.seniority} />
+                    </td>
+                    <td className="py-2 pr-4">
+                      {c.email ? (
+                        <div className="flex items-center gap-2">
+                          <a href={`mailto:${c.email}`} className="text-indigo-600 hover:underline">
+                            {c.email}
+                          </a>
+                          {c.email_confidence === 'verified' && (
+                            <span className="text-xs text-green-700 font-semibold">verified</span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {c.linkedin_url ? (
+                        <a
+                          href={c.linkedin_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-indigo-600 hover:underline"
+                        >
+                          profile ↗
+                        </a>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="py-2">
+                      {c.is_primary && (
+                        <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-indigo-100 text-indigo-800">
+                          ★ primary
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
+}
+
+const SENIORITY_DISPLAY: Record<string, { label: string; cls: string }> = {
+  founder:  { label: 'Founder',  cls: 'bg-purple-100 text-purple-800' },
+  owner:    { label: 'Owner',    cls: 'bg-purple-100 text-purple-800' },
+  c_suite:  { label: 'C-Suite',  cls: 'bg-indigo-100 text-indigo-800' },
+  vp:       { label: 'VP',       cls: 'bg-blue-100 text-blue-800' },
+  director: { label: 'Director', cls: 'bg-sky-100 text-sky-800' },
+  manager:  { label: 'Manager',  cls: 'bg-gray-100 text-gray-700' },
+  other:    { label: 'Staff',    cls: 'bg-gray-100 text-gray-600' },
+}
+
+function SeniorityChip({ seniority }: { seniority: string | null }) {
+  const key = (seniority ?? 'other').toLowerCase()
+  const disp = SENIORITY_DISPLAY[key] ?? SENIORITY_DISPLAY.other
+  return (
+    <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded ${disp.cls}`}>
+      {disp.label}
+    </span>
+  )
+}
+
+const SENIORITY_ORDER = ['founder', 'owner', 'c_suite', 'vp', 'director', 'manager', 'other']
+function seniorityRank(s: string | null): number {
+  const idx = SENIORITY_ORDER.indexOf((s ?? 'other').toLowerCase())
+  return idx === -1 ? 999 : idx
 }
 
 function Row({ label, children }: { label: string; children: any }) {

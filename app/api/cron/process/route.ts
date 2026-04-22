@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { enrichProspect } from '@/lib/enrich'
 import { analyzeProspect } from '@/lib/analyze'
+import { findContacts } from '@/lib/contacts'
 import { generatePitch } from '@/lib/pitch'
 
 export const maxDuration = 60
@@ -9,7 +10,7 @@ export const maxDuration = 60
 const JOBS_PER_RUN = 10
 const MAX_ATTEMPTS = 3
 
-type JobType = 'enrich' | 'analyze' | 'pitch'
+type JobType = 'enrich' | 'analyze' | 'find_contacts' | 'pitch'
 type JobStatus = 'pending' | 'running' | 'done' | 'failed'
 
 interface Job {
@@ -106,6 +107,8 @@ async function dispatch(job: Job): Promise<void> {
       return enrichProspect(job.prospect_id)
     case 'analyze':
       return analyzeProspect(job.prospect_id)
+    case 'find_contacts':
+      return findContacts(job.prospect_id)
     case 'pitch':
       return generatePitch(job.prospect_id)
     default:
@@ -115,7 +118,10 @@ async function dispatch(job: Job): Promise<void> {
 
 async function enqueueNext(job: Job): Promise<void> {
   const next: JobType | null =
-    job.job_type === 'enrich' ? 'analyze' : job.job_type === 'analyze' ? 'pitch' : null
+    job.job_type === 'enrich' ? 'analyze'
+    : job.job_type === 'analyze' ? 'find_contacts'
+    : job.job_type === 'find_contacts' ? 'pitch'
+    : null
 
   if (!next) return
 

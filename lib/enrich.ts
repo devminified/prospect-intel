@@ -26,6 +26,37 @@ interface EnrichmentRow {
 
 const FETCH_TIMEOUT_MS = 8000
 const HOMEPAGE_EXCERPT_CHARS = 3000
+const SCRAPINGBEE_TIMEOUT_MS = 30000
+const THIN_TEXT_THRESHOLD = 500
+
+async function fetchRendered(url: string): Promise<string | null> {
+  const apiKey = process.env.SCRAPINGBEE_API_KEY
+  if (!apiKey) return null
+  const sb = new URL('https://app.scrapingbee.com/api/v1/')
+  sb.searchParams.set('api_key', apiKey)
+  sb.searchParams.set('url', url)
+  sb.searchParams.set('render_js', 'true')
+  sb.searchParams.set('block_resources', 'false')
+  try {
+    const res = await fetch(sb.toString(), {
+      signal: AbortSignal.timeout(SCRAPINGBEE_TIMEOUT_MS),
+    })
+    if (!res.ok) {
+      console.warn(`[ScrapingBee] ${res.status} for ${url}`)
+      return null
+    }
+    return await res.text()
+  } catch (err: any) {
+    console.warn(`[ScrapingBee] ${err?.message ?? err} for ${url}`)
+    return null
+  }
+}
+
+function extractText(html: string): string {
+  const $ = cheerio.load(html)
+  $('script, style, noscript').remove()
+  return $('body').text().replace(/\s+/g, ' ').trim()
+}
 
 export async function enrichProspect(prospectId: string): Promise<void> {
   const { data: prospect, error: prospectError } = await supabaseAdmin
@@ -87,8 +118,6 @@ export async function enrichProspect(prospectId: string): Promise<void> {
       fetchError = httpsResult.error ?? httpResult.error ?? 'fetch failed'
     }
   }
-  void finalUrl
-
   const techStack: TechStack = {
     has_website: true,
     website_status: status,
@@ -103,11 +132,23 @@ export async function enrichProspect(prospectId: string): Promise<void> {
   let isMobileFriendly = false
 
   if (html) {
-    const $ = cheerio.load(html)
+    let bodyText = extractText(html)
 
-    $('script, style, noscript').remove()
-    const bodyText = $('body').text().replace(/\s+/g, ' ').trim()
+    if (bodyText.length < THIN_TEXT_THRESHOLD && (finalUrl || httpsUrl)) {
+      const renderUrl = finalUrl ?? httpsUrl
+      const rendered = await fetchRendered(renderUrl)
+      if (rendered) {
+        const renderedText = extractText(rendered)
+        if (renderedText.length > bodyText.length) {
+          html = rendered
+          bodyText = renderedText
+        }
+      }
+    }
+
     homepageText = bodyText.slice(0, HOMEPAGE_EXCERPT_CHARS)
+
+    const $ = cheerio.load(html)
 
     isMobileFriendly = $('meta[name="viewport"]').length > 0
 

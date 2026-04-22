@@ -12,6 +12,8 @@ interface Prospect {
   rating: number | null
   review_count: number | null
   analyses: { opportunity_score: number | null; best_angle: string | null } | null
+  last_error?: string | null
+  failed_stage?: string | null
 }
 
 interface Batch {
@@ -60,7 +62,23 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
       return
     }
 
-    const sorted = ((p as unknown as Prospect[]) ?? []).sort((a, b) => {
+    const { data: failedJobs } = await supabase
+      .from('jobs')
+      .select('prospect_id, job_type, last_error, status')
+      .eq('batch_id', id)
+      .eq('status', 'failed')
+    const errorByProspect = new Map<string, { stage: string; message: string }>()
+    for (const j of (failedJobs as any[]) ?? []) {
+      if (j.last_error) {
+        errorByProspect.set(j.prospect_id, { stage: j.job_type, message: j.last_error })
+      }
+    }
+
+    const decorated = ((p as unknown as Prospect[]) ?? []).map((x) => {
+      const err = errorByProspect.get(x.id)
+      return err ? { ...x, failed_stage: err.stage, last_error: err.message } : x
+    })
+    const sorted = decorated.sort((a, b) => {
       const sa = a.analyses?.opportunity_score ?? -1
       const sb = b.analyses?.opportunity_score ?? -1
       return sb - sa
@@ -159,6 +177,12 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
                       </div>
                       {angle && (
                         <p className="mt-2 text-sm text-gray-600 line-clamp-2">{angle}</p>
+                      )}
+                      {p.last_error && (
+                        <p className="mt-2 text-xs text-red-600 line-clamp-2">
+                          <span className="font-mono font-semibold uppercase">{p.failed_stage} failed:</span>{' '}
+                          {p.last_error}
+                        </p>
                       )}
                       <p className="mt-1 text-xs text-gray-400">
                         {p.website ?? 'no website'}

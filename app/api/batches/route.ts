@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
-import { searchPlaces, getPlaceDetails } from '@/lib/places'
+import { searchPlaces } from '@/lib/places'
 import { enqueueJob } from '@/lib/queue'
 
 interface CreateBatchRequest {
@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
     let places
     try {
       places = await searchPlaces(category, city)
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error searching places:', error)
 
       await supabaseAdmin
@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
         .eq('id', batch.id)
 
       return NextResponse.json(
-        { error: 'Failed to fetch places from HERE' },
+        { error: error?.message ?? 'Unknown error fetching places' },
         { status: 500 }
       )
     }
@@ -87,27 +87,22 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Process each place and create prospects
     const prospects = []
     for (const place of limitedPlaces) {
       try {
-        // Get detailed information
-        const details = await getPlaceDetails(place.place_id)
-        
-        // Create prospect record
         const { data: prospect, error: prospectError } = await supabaseAdmin
           .from('prospects')
           .insert({
             batch_id: batch.id,
             name: place.name,
-            address: place.formatted_address || details?.formatted_address,
-            phone: details?.formatted_phone_number,
-            website: details?.website,
+            address: place.formatted_address,
+            phone: place.phone,
+            website: place.website,
             place_id: place.place_id,
-            rating: place.rating || details?.rating,
-            review_count: place.user_ratings_total || details?.user_ratings_total,
-            hours_json: details?.opening_hours || place.opening_hours,
-            categories_text: (place.types || details?.types)?.join(', '),
+            rating: place.rating,
+            review_count: place.user_ratings_total,
+            hours_json: place.opening_hours,
+            categories_text: place.types?.join(', '),
             status: 'new',
           })
           .select()
@@ -120,7 +115,6 @@ export async function POST(request: NextRequest) {
 
         prospects.push(prospect)
 
-        // Enqueue enrichment job
         try {
           await enqueueJob(batch.id, prospect.id, 'enrich')
         } catch (queueError) {

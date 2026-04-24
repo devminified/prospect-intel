@@ -1,29 +1,31 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+const NAV = [
+  { href: '/plans', label: 'Plans' },
+  { href: '/batches', label: 'Batches' },
+  { href: '/settings/icp', label: 'ICP' },
+]
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const router = useRouter()
+  const pathname = usePathname()
 
   useEffect(() => {
     const getUser = async () => {
       const { data: { user } } = await supabase.auth.getUser()
       setUser(user)
       setLoading(false)
-      
-      if (!user) {
-        router.push('/login')
-      }
+      if (!user) router.push('/login')
     }
 
     getUser()
@@ -48,45 +50,49 @@ export default function DashboardLayout({
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-gray-600">Loading...</div>
+        <p className="text-muted-foreground">Loading…</p>
       </div>
     )
   }
-
-  if (!user) {
-    return null // Will redirect to login
-  }
+  if (!user) return null
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      <nav className="bg-white shadow-sm border-b">
+    <div className="min-h-screen bg-muted/30">
+      <nav className="bg-background border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center gap-6">
-              <h1 className="text-xl font-semibold text-gray-900">Prospect Intel</h1>
-              <nav className="hidden md:flex gap-4 text-sm">
-                <Link href="/plans" className="text-gray-700 hover:text-indigo-600">Plans</Link>
-                <Link href="/batches" className="text-gray-700 hover:text-indigo-600">Batches</Link>
-                <Link href="/settings/icp" className="text-gray-700 hover:text-indigo-600">ICP</Link>
+              <h1 className="text-xl font-semibold">Prospect Intel</h1>
+              <nav className="hidden md:flex gap-1 text-sm">
+                {NAV.map((n) => {
+                  const active = pathname === n.href || pathname.startsWith(`${n.href}/`)
+                  return (
+                    <Link
+                      key={n.href}
+                      href={n.href}
+                      className={cn(
+                        'px-3 py-1.5 rounded-md transition-colors',
+                        active
+                          ? 'bg-secondary text-secondary-foreground'
+                          : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                      )}
+                    >
+                      {n.label}
+                    </Link>
+                  )
+                })}
               </nav>
             </div>
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-700">{user.email}</span>
-              <button
-                onClick={handleLogout}
-                className="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded text-sm"
-              >
-                Logout
-              </button>
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-muted-foreground hidden sm:inline">{user.email}</span>
+              <Button variant="outline" size="sm" onClick={handleLogout}>Logout</Button>
             </div>
           </div>
         </div>
       </nav>
 
       <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
-          {children}
-        </div>
+        <div className="px-4 py-6 sm:px-0">{children}</div>
       </div>
     </div>
   )

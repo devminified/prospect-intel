@@ -361,7 +361,10 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   const primaryContactEmail = contacts.find((c) => c.is_primary && c.email)?.email ?? contacts.find((c) => c.email)?.email ?? null
   const realOpens = (sentEmail?.email_opens ?? []).filter((o) => !o.is_probably_mpp).length
   const mppOpens = (sentEmail?.email_opens ?? []).filter((o) => o.is_probably_mpp).length
-  const replyCount = sentEmail?.email_replies?.length ?? 0
+  const replies = sentEmail?.email_replies ?? []
+  const replyCount = replies.length
+  const latestReply = replies[replies.length - 1] ?? null
+  const replyClassification = latestReply?.classification ?? null
   const sortedContacts = [...contacts].sort((a, b) => {
     if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1
     return seniorityRank(a.seniority) - seniorityRank(b.seniority)
@@ -595,7 +598,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                         </Badge>
                       )}
                     </div>
-                    <div className="flex items-center gap-4 text-muted-foreground">
+                    <div className="flex items-center gap-4 text-muted-foreground flex-wrap">
                       <span>
                         <span className="font-semibold text-foreground">{realOpens}</span> opens
                         {mppOpens > 0 && (
@@ -605,7 +608,13 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                       <span>
                         <span className="font-semibold text-foreground">{replyCount}</span> replies
                       </span>
+                      {replyClassification && <ReplyClassificationBadge classification={replyClassification} />}
                     </div>
+                    {latestReply?.received_at && (
+                      <div className="text-muted-foreground/80">
+                        last reply {new Date(latestReply.received_at).toLocaleString()}
+                      </div>
+                    )}
                     {sentEmail.bounce_reason && (
                       <p className="text-destructive">bounce: {sentEmail.bounce_reason}</p>
                     )}
@@ -916,6 +925,19 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
       {sub && <div className="text-xs text-muted-foreground">{sub}</div>}
     </div>
   )
+}
+
+const REPLY_CLASSIFICATION_STYLE: Record<string, { label: string; cls: string }> = {
+  interested:      { label: '★ interested',       cls: 'bg-green-100 text-green-800 hover:bg-green-100' },
+  not_interested:  { label: 'not interested',     cls: 'bg-red-100 text-red-800 hover:bg-red-100' },
+  ooo:             { label: 'out of office',      cls: 'bg-sky-100 text-sky-800 hover:bg-sky-100' },
+  unsubscribe:     { label: 'unsubscribe',        cls: 'bg-neutral-200 text-neutral-800 hover:bg-neutral-200' },
+  question:        { label: 'question',           cls: 'bg-amber-100 text-amber-800 hover:bg-amber-100' },
+}
+
+function ReplyClassificationBadge({ classification }: { classification: string }) {
+  const style = REPLY_CLASSIFICATION_STYLE[classification] ?? { label: classification, cls: 'bg-secondary text-secondary-foreground hover:bg-secondary' }
+  return <Badge className={style.cls}>{style.label}</Badge>
 }
 
 function FitBar({ label, score, accent }: { label: string; score: number; accent: 'green' | 'blue' }) {

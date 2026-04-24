@@ -233,6 +233,39 @@ PHONE SCRIPT RULES (only required if recommended_channel is "phone" or "either")
 Return ONLY valid JSON matching the required schema.`
 }
 
+export interface ReplyClassificationPromptInput {
+  snippet: string
+  sender_email: string
+  sender_name?: string | null
+  original_subject?: string | null
+}
+
+/**
+ * Haiku classifier for a reply to our cold-outreach email.
+ * One of: interested | not_interested | ooo | unsubscribe | question
+ */
+export function replyClassificationPrompt(i: ReplyClassificationPromptInput): string {
+  return `Classify this reply to a cold outreach email into exactly one category:
+
+- interested: wants to hear more, asks for a call, asks for pricing, says yes
+- not_interested: polite no, "we already have a vendor", "not a priority", hard pass
+- ooo: auto-response — out of office, vacation, parental leave, no longer with company
+- unsubscribe: asks to be removed, says "unsubscribe", "take me off your list", "stop emailing"
+- question: asks a clarifying question without committing either way
+
+ORIGINAL SUBJECT: ${i.original_subject ?? '(unknown)'}
+SENDER: ${i.sender_name ?? '(unknown)'} <${i.sender_email}>
+REPLY BODY:
+${i.snippet.slice(0, 2000)}
+
+Rules:
+- If the reply is genuinely ambiguous, pick "question".
+- Auto-responses ALWAYS map to "ooo" regardless of their wording.
+- An angry rant that says "stop emailing me" is "unsubscribe", not "not_interested".
+
+Return ONLY valid JSON matching the required schema.`
+}
+
 export interface AnalysisPromptInput {
   name: string
   category: string

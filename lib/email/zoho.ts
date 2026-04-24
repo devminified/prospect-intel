@@ -128,6 +128,87 @@ export interface SendMessageResult {
   threadId: string | null
 }
 
+export interface ZohoFolder {
+  folderId: string
+  folderName: string
+  folderType?: string
+}
+
+/** GET /api/accounts/{accountId}/folders — list all folders for the mailbox. */
+export async function listFolders(
+  accessToken: string,
+  apiDomain: string,
+  accountId: string
+): Promise<ZohoFolder[]> {
+  const base = apiDomain || DEFAULT_API_DOMAIN
+  const res = await fetch(`${base}/api/accounts/${accountId}/folders`, {
+    headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+    signal: AbortSignal.timeout(15_000),
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new ExternalAPIError(PROVIDER, `listFolders failed: ${JSON.stringify(data ?? {})}`, res.status)
+  }
+  return (data?.data ?? []).map((f: any) => ({
+    folderId: String(f.folderId),
+    folderName: String(f.folderName ?? ''),
+    folderType: f.folderType ?? undefined,
+  }))
+}
+
+export interface ZohoMessageSummary {
+  messageId: string
+  threadId: string | null
+  fromAddress: string
+  toAddress: string | null
+  subject: string
+  receivedTimeMs: number
+  summary: string
+  folderId: string
+}
+
+/**
+ * GET /api/accounts/{accountId}/messages/view
+ * Newest-first, up to `limit` messages in one folder.
+ */
+export async function listMessages(
+  accessToken: string,
+  apiDomain: string,
+  accountId: string,
+  folderId: string,
+  limit = 50
+): Promise<ZohoMessageSummary[]> {
+  const base = apiDomain || DEFAULT_API_DOMAIN
+  const params = new URLSearchParams({
+    folderId,
+    limit: String(Math.min(limit, 200)),
+    sortBy: 'date',
+    sortorder: 'false', // descending — newest first
+  })
+  const res = await fetch(`${base}/api/accounts/${accountId}/messages/view?${params.toString()}`, {
+    headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+    signal: AbortSignal.timeout(20_000),
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new ExternalAPIError(PROVIDER, `listMessages failed: ${JSON.stringify(data ?? {})}`, res.status)
+  }
+  return (data?.data ?? []).map((m: any) => {
+    const rt = m.receivedTime ?? m.sentDateInGMT ?? Date.now()
+    const receivedTimeMs = typeof rt === 'number' ? rt : parseInt(String(rt), 10) || Date.now()
+    return {
+      messageId: String(m.messageId ?? ''),
+      threadId: m.threadId ? String(m.threadId) : null,
+      fromAddress: String(m.fromAddress ?? '').toLowerCase(),
+      toAddress: m.toAddress ? String(m.toAddress).toLowerCase() : null,
+      subject: String(m.subject ?? ''),
+      receivedTimeMs,
+      summary: String(m.summary ?? ''),
+      folderId: String(m.folderId ?? folderId),
+    }
+  })
+}
+
 export async function sendMessage(
   accessToken: string,
   apiDomain: string,

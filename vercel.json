@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/process",
       "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/cron/read-replies",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

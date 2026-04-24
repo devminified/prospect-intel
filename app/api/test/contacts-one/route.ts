@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { findContacts } from '@/lib/contacts'
+import { discoverPeople } from '@/lib/contacts'
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization')
@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    await findContacts(prospectId)
+    await discoverPeople(prospectId)
     return NextResponse.json({ ok: true, prospect_id: prospectId })
   } catch (error: any) {
     return NextResponse.json(

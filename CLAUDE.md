@@ -201,45 +201,91 @@ Enable Row Level Security on every table. Write policies so a user can only see 
 
 ## 6. Folder Structure
 
+This section reflects the **current** tree as of Phase 4A. See §17 for scaling playbooks (how to add a new pipeline stage, a new external API, a new table, etc.).
+
 ```
 prospect-intel/
 ├── app/
-│   ├── (auth)/
+│   ├── (auth)/                                       ← public routes, no auth guard
 │   │   ├── login/page.tsx
 │   │   └── signup/page.tsx
-│   ├── (dashboard)/
-│   │   ├── layout.tsx              ← sidebar, auth guard
-│   │   ├── page.tsx                ← redirect to /batches
+│   ├── (dashboard)/                                  ← everything behind auth (layout enforces)
+│   │   ├── layout.tsx                                ← session guard + top nav
 │   │   ├── batches/
-│   │   │   ├── page.tsx            ← list + create form
-│   │   │   └── [id]/page.tsx       ← batch detail (prospects in this batch)
-│   │   └── prospects/
-│   │       ├── page.tsx            ← all prospects, filters
-│   │       └── [id]/page.tsx       ← detail: signals | analysis | pitch
+│   │   │   ├── page.tsx                              ← list + create form (+ pitch_score_threshold, auto_enrich_top_n)
+│   │   │   └── [id]/page.tsx                         ← batch detail: sorted prospect list + Export CSV
+│   │   ├── prospects/[id]/page.tsx                   ← 3-panel (signals / analysis / pitch) + visibility + executives
+│   │   ├── plans/
+│   │   │   ├── page.tsx                              ← list of daily lead plans
+│   │   │   └── [id]/page.tsx                         ← plan detail + Execute all + per-item Run
+│   │   └── settings/icp/page.tsx                     ← ICP form (services, capacity, target categories, cities, quality floor)
 │   ├── api/
-│   │   ├── batches/route.ts        ← POST: create batch + fetch places + queue jobs
-│   │   ├── prospects/[id]/route.ts ← GET, PATCH (status, edited_body)
-│   │   ├── pitches/export/route.ts ← GET: CSV of approved pitches
-│   │   └── cron/process/route.ts   ← GET: process next N jobs
-│   ├── layout.tsx
-│   └── globals.css
+│   │   ├── batches/route.ts                          ← POST: create batch, queue 1 enrich job per prospect
+│   │   ├── cron/process/route.ts                     ← GET: atomic claim + dispatch, stuck-job reaper, settle-batch auto-enrich
+│   │   ├── icp/route.ts                              ← GET + PATCH (JWT-scoped to auth.uid)
+│   │   ├── pitches/export/route.ts                   ← GET: CSV of approved pitches for a batch
+│   │   ├── plans/route.ts                            ← POST: generate today's plan via Opus
+│   │   ├── plans/[id]/execute/route.ts               ← POST: execute all items (or ?item_id=... for one)
+│   │   ├── prospects/[id]/route.ts                   ← PATCH: prospect status, pitch edited_body, pitch status
+│   │   ├── prospects/[id]/discover-contacts/route.ts ← POST: Apollo people search (no email credits)
+│   │   ├── prospects/[id]/contacts/[contactId]/reveal/route.ts ← POST: Apollo /people/match (1 email credit)
+│   │   ├── prospects/[id]/regenerate-pitch/route.ts  ← POST: re-run Sonnet with latest enrichment
+│   │   └── test/                                     ← CRON_SECRET-gated per-stage invokers for manual debugging
+│   │       ├── analyze-one/route.ts
+│   │       ├── audit-one/route.ts
+│   │       ├── contacts-one/route.ts
+│   │       ├── enrich-demo/route.ts
+│   │       ├── enrich-one/route.ts
+│   │       └── pitch-one/route.ts
+│   ├── layout.tsx                                    ← root <html>
+│   └── page.tsx                                      ← redirects "/" → "/batches"
 ├── lib/
-│   ├── supabase/
-│   │   ├── server.ts               ← server-side client
-│   │   └── client.ts               ← browser client
-│   ├── places.ts                   ← HERE Maps API wrapper
-│   ├── enrich.ts                   ← fetch + cheerio signal extraction
-│   ├── analyze.ts                  ← Claude Haiku call
-│   ├── pitch.ts                    ← Claude Sonnet call
-│   ├── prompts.ts                  ← prompt templates (single source of truth)
-│   └── queue.ts                    ← enqueue/dequeue helpers
-├── supabase/
-│   └── migrations/0001_init.sql
-├── vercel.json
-├── .env.local.example
-├── package.json
-└── README.md
+│   ├── analyze.ts                                    ← Haiku 4.5: 3 pain points per prospect
+│   ├── audit.ts                                      ← Visibility audit: GMB + social + SerpApi rank + Groq summary
+│   ├── booking-platforms.ts                          ← 16 booking-platform regexes + generic Book Now CTA catch-all
+│   ├── contacts.ts                                   ← Apollo: discoverPeople (list) + revealEmail (per-contact credit)
+│   ├── enrich.ts                                     ← fetch + Cheerio + ScrapingBee AI Extract → tech signals + scraped_data_json
+│   ├── errors.ts                                     ← ExternalAPIError (provider-tagged, surfaces in UI + cron last_error)
+│   ├── llm/
+│   │   └── groq.ts                                   ← Groq client for bulk summarization (visibility summaries only)
+│   ├── pitch.ts                                      ← Sonnet 4.6: 4-sentence cold email; upsert so Regenerate works
+│   ├── places.ts                                     ← Google Places API (New): Text Search + Place Details
+│   ├── plans.ts                                      ← Planner (Opus 4.7) + execute (creates batches from plan items)
+│   ├── prompts.ts                                    ← SINGLE source of truth for all prompt templates
+│   ├── queue.ts                                      ← enqueueJob / getNextJobs / markJobRunning / markJobDone / markJobFailed
+│   ├── scrape/
+│   │   └── scrapingbee.ts                            ← renderPage (JS-render fallback) + extractTypedFields (AI Extract)
+│   ├── seasonality.ts                                ← Hardcoded peak-months calendar (50 SMB categories)
+│   └── supabase/
+│       ├── client.ts                                 ← browser client (anon key, RLS-scoped)
+│       └── server.ts                                 ← supabaseAdmin (service role key, SERVER ONLY)
+├── supabase/migrations/                              ← timestamped SQL migrations, applied via `supabase db push`
+│   ├── 20260420181100_init.sql                       ← M1–M10 schema: batches, prospects, enrichments, analyses, pitches, jobs
+│   ├── 20260422000000_rename_place_id.sql            ← HERE → Google: google_place_id → place_id
+│   ├── 20260422180000_contacts.sql                   ← M12 contacts table + RLS
+│   ├── 20260423000000_visibility_audits.sql          ← M13 visibility_audits + RLS
+│   ├── 20260424000000_phase3.sql                     ← contacts.email_revealed_at + batches.pitch_score_threshold + batches.auto_enrich_top_n + enrichments.scraped_data_json
+│   └── 20260424120000_plans.sql                      ← M20: icp_profile, lead_plans, lead_plan_items + RLS
+├── .env.local.example                                ← all env keys, empty values
+├── .mcp.json                                         ← Playwright MCP for local QA
+├── vercel.json                                       ← cron schedule */2 * * * *
+├── CLAUDE.md                                         ← this file: spec, scope, conventions
+└── package.json
 ```
+
+**One-line purpose per top-level folder:**
+
+| Folder | Purpose | Rule |
+|---|---|---|
+| `app/(auth)/` | Public auth pages | No layout auth guard; simple Supabase client calls |
+| `app/(dashboard)/` | Behind-auth UI | Layout redirects to `/login` if no session |
+| `app/api/` | Server routes | JWT validation at the top of every mutating route; ownership check through `batches.user_id` |
+| `app/api/test/` | Manual-debug endpoints | **Always `CRON_SECRET`-gated.** Never add a user-facing route here |
+| `lib/` | Pure server logic | No JSX, no React, no `window.*`. Callable from cron + API + tests |
+| `lib/llm/` | Thin clients for LLM providers | One file per provider. Grows: `anthropic.ts` when we abstract beyond direct SDK use |
+| `lib/scrape/` | Scraping providers | One file per provider (`scrapingbee.ts`). Grows: add `playwright.ts` if we self-host later |
+| `lib/supabase/` | DB clients | `client.ts` (browser/anon) vs `server.ts` (service role — server only) |
+| `supabase/migrations/` | Schema history | **Append-only.** Never edit a past migration. Name: `YYYYMMDDHHMMSS_short_description.sql` |
 
 ---
 
@@ -1064,4 +1110,172 @@ Model: `claude-opus-4-7` · `thinking: {type: 'adaptive'}` · `output_config: {e
 - Daily 08:00 UTC cron auto-generation (4C)
 - Reply-email classifier (Haiku) (4C)
 - Multi-user shared plan calendar (still single-user)
+
+---
+
+## 17. Conventions & Scaling Playbook
+
+This section is for *new contributors* (human or AI). Read it before adding code. Every rule here exists because we already hit the gap it covers during M1–M20.
+
+### 17.1 Naming conventions
+
+| Artifact | Pattern | Example |
+|---|---|---|
+| Migration file | `YYYYMMDDHHMMSS_snake_case_description.sql` | `20260424120000_plans.sql` |
+| API route | `app/api/<noun>/<verb-or-param>/route.ts` | `app/api/prospects/[id]/regenerate-pitch/route.ts` |
+| Lib file | `lib/<single-noun>.ts` for a module, `lib/<category>/<provider>.ts` for a vendor client | `lib/contacts.ts`, `lib/scrape/scrapingbee.ts` |
+| UI page | `app/(dashboard)/<noun>/page.tsx` or `.../[id]/page.tsx` | `app/(dashboard)/plans/[id]/page.tsx` |
+| Test endpoint | `app/api/test/<stage>-one/route.ts`, `CRON_SECRET`-gated | `app/api/test/contacts-one/route.ts` |
+| Env var | `UPPER_SNAKE_CASE`; client-visible ones get `NEXT_PUBLIC_` prefix | `APOLLO_API_KEY`, `NEXT_PUBLIC_SUPABASE_URL` |
+| DB table | snake_case, singular subject per row | `visibility_audits` (NOT `visibilityAudits`) |
+| DB column | snake_case; `*_json` for jsonb; `*_at` for timestamptz | `scraped_data_json`, `email_revealed_at` |
+
+### 17.2 Where things go — decision tree
+
+```
+Is it server-side business logic (no React, no browser globals)?
+  → lib/
+     ├─ is it a thin wrapper around one external API?      → lib/<category>/<provider>.ts
+     ├─ is it shared infra (errors, queue, db clients)?    → lib/*.ts at the root (errors.ts, queue.ts, supabase/)
+     └─ is it a pipeline stage (enrich, analyze, pitch)?   → lib/<stage>.ts
+Is it an HTTP handler?
+  → app/api/<resource>/[...].ts  (JWT auth at the top; ownership check; structured error)
+  Is it CRON_SECRET-gated and only for debugging?           → app/api/test/*
+Is it React?
+  → app/(dashboard)/<route>/page.tsx  (client component; uses supabase client + fetch)
+  OR app/(auth)/<route>/page.tsx (public)
+Is it a prompt string?
+  → lib/prompts.ts  (NEVER inline in api routes or lib modules)
+Is it a schema migration?
+  → supabase/migrations/<new-timestamp>_<desc>.sql
+  Is it changing an existing column's meaning?              → write a rename/alter migration — NEVER edit an old one
+```
+
+### 17.3 Playbook — add a new pipeline stage (e.g. "enrich_finances")
+
+We did this four times already (enrich, analyze, audit_visibility, pitch, discover_contacts). The recipe:
+
+1. **Migration** (if it needs its own table): `supabase/migrations/<ts>_<name>.sql` with RLS policy that chains through `prospects.batch_id → batches.user_id`.
+2. **Lib module**: `lib/<stage>.ts` with a single exported `async function <stage>Prospect(prospectId: string): Promise<void>`. Reads prospect row → does work → writes result row.
+3. **Prompt** (if LLM-backed): add `<stage>Prompt(input)` to `lib/prompts.ts`. Never inline.
+4. **Cron wiring** (`app/api/cron/process/route.ts`):
+   - Add the new string to `JobType`.
+   - Add a `case '<stage>': return <stage>Prospect(job.prospect_id)` in `dispatch()`.
+   - Add the chain entry in `enqueueNext()` if it runs auto (not all do — `discover_contacts` is opt-in).
+5. **Test endpoint**: `app/api/test/<stage>-one/route.ts`, CRON_SECRET-gated. Copy the shape from `audit-one/route.ts`.
+6. **UI panel** (if user should see it): add a section to `app/(dashboard)/prospects/[id]/page.tsx`, load the new row in the existing `Promise.all` block in `load()`.
+
+### 17.4 Playbook — add a new external API integration
+
+1. **Env var** added to `.env.local.example` (empty value) AND pushed to Vercel (`vercel env add`).
+2. **Lib file**: `lib/<category>/<provider>.ts` if vendor, else `lib/<noun>.ts`. Export functions, not classes.
+3. **Error tagging**: every non-2xx response throws `new ExternalAPIError('<Provider>', message, status)` from `lib/errors.ts`. The UI + cron last_error column both read `error.message`, which shows the user `[Provider] ...` prefix.
+4. **Timeouts**: every `fetch` gets `signal: AbortSignal.timeout(ms)`. Serverless functions have a 60s hard ceiling on Vercel Pro.
+5. **Graceful degradation**: audit-style fan-out (`Promise.allSettled`) when one signal failing shouldn't kill the whole job. Hard-fail only for critical-path stages.
+
+### 17.5 Playbook — add a new API route
+
+Skeleton every mutating route should match:
+
+```ts
+import { NextRequest, NextResponse } from 'next/server'
+import { supabaseAdmin } from '@/lib/supabase/server'
+
+export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params
+
+  // 1. AUTH — JWT bearer
+  const authHeader = request.headers.get('authorization')
+  if (!authHeader?.startsWith('Bearer ')) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  const { data: userData, error: authErr } = await supabaseAdmin.auth.getUser(
+    authHeader.replace('Bearer ', '')
+  )
+  if (authErr || !userData?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  const userId = userData.user.id
+
+  // 2. OWNERSHIP — chain through batches.user_id
+  const { data: row, error } = await supabaseAdmin
+    .from('prospects').select('id, batches!inner(user_id)').eq('id', id).single()
+  if (error || !row) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if ((row as any).batches?.user_id !== userId) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
+  // 3. WORK — delegate to lib, never inline business logic here
+  try {
+    const result = await doWork(id)
+    return NextResponse.json({ ok: true, ...result })
+  } catch (err: any) {
+    return NextResponse.json({ error: err?.message ?? 'Failed' }, { status: 500 })
+  }
+}
+```
+
+Never skip steps 1–2. Never put business logic in the route body — delegate to `lib/`.
+
+### 17.6 Playbook — add a new table
+
+1. **Migration** with `create table ...` + `create index` + `alter table ... enable row level security` + a policy that chains to `auth.uid()` through whatever foreign key makes sense.
+2. **Test the RLS**: query the table with the user's JWT — confirm they only see their rows. Do this **locally against the Supabase REST API with the anon key + bearer token** before shipping.
+3. **DB client**: server code writes via `supabaseAdmin` (service role bypasses RLS). Browser code reads via the `supabase` export from `lib/supabase/client.ts` (anon — RLS-enforced).
+4. **Types**: no generated types — we define narrow `interface Row { ... }` at the top of each consumer file. Matches how we handle the rest of the codebase.
+
+### 17.7 Error handling rules
+
+- Every `Bash`/`fetch` boundary wrapped in `try/catch`.
+- Every caught error carries a readable `.message`. Use `errorMessage(err)` from `lib/errors.ts` when you don't control the shape.
+- Provider-tagged errors (`[Google Places] ...`, `[Apollo] ...`, `[ScrapingBee] ...`) via `ExternalAPIError` — see §17.4.
+- API route errors return `{ error: string }` with 4xx/5xx status — never swallow into 200.
+- Background job errors (cron dispatcher) get written to `jobs.last_error` and surfaced in the batch detail UI per-prospect.
+
+### 17.8 Testing approach
+
+We do **not** write unit tests. Verification is manual, driven by three tools:
+
+1. **Test endpoints** (`app/api/test/*-one`) — CRON_SECRET-gated, run one pipeline stage against one prospect. Useful when you need to iterate on a lib module without running a full batch.
+2. **`curl` scripts in chat** — submit a batch, drive the cron, check rows. Embedded in every milestone verification.
+3. **Playwright MCP** — when available, drives the UI end-to-end. Captures screenshots in `.playwright-mcp/`.
+
+If a change breaks the happy path, you'll see it in the next batch. No CI gate guards against it. This is a deliberate MVP choice per CLAUDE.md §11.
+
+### 17.9 UI conventions (for Phase 4+ contributors)
+
+- **Plain Tailwind, no shadcn/Radix/component-library.** CLAUDE.md §2 explicitly forbids them unless the user opts in. Existing pages use handwritten `<div className="...">` + inline conditional classes.
+- **Client components only** (`'use client'`). Every dashboard page does its own data fetching via the `supabase` client with the user's session.
+- **Error display**: red banner at the top of the page with the raw `error` string. Success: green banner. See `app/(dashboard)/batches/page.tsx` for the canonical pattern.
+- **Auth header helper**: when hitting our own API from the browser, get the token via `supabase.auth.getSession()` and set `Authorization: Bearer <token>`. See `app/(dashboard)/prospects/[id]/page.tsx::authHeaders()`.
+- **Nav**: add new top-level pages to the dashboard nav in `app/(dashboard)/layout.tsx`. Keep the list short — if it gets past 5 links, introduce a dropdown or a sidebar.
+
+### 17.10 Anti-patterns — DO NOT
+
+- **Don't inline prompt strings in `api/` or `lib/<stage>.ts`.** All prompts belong in `lib/prompts.ts` as exported functions taking typed inputs.
+- **Don't call `supabaseAdmin` from client code.** The service role key must never reach the browser. `lib/supabase/server.ts` is the only file that should ever import it.
+- **Don't hand-edit an existing migration.** Schema changes go in a NEW timestamped file. Someone downstream may have already applied the old version.
+- **Don't add a dependency without flagging it.** Every npm package pulls latency, bundle size, and security surface. Current working set is deliberately small — Anthropic SDK, Cheerio, Supabase client, Next.js. That's it.
+- **Don't chain jobs inside `lib/<stage>.ts`.** The cron processor (`app/api/cron/process/route.ts`) owns chaining. Keep lib modules pure: they read, do work, write.
+- **Don't log or echo secrets.** If a debug line needs to confirm a key is set, print its length, not its value.
+- **Don't catch-and-ignore.** If you `try/catch`, you re-throw, log, or return a structured error. Silent swallowing has bit us three times during Phase 2/3 dogfood.
+
+### 17.11 When this codebase should split
+
+MVP-to-V2 is OK at this scale (~5,000 LOC after Phase 4A). Re-evaluate splitting into multiple packages if any of these happen:
+
+- Total lib surface exceeds 3,000 LOC. Then break `lib/` into subpackages by domain (`lib/pipeline/`, `lib/integrations/`, `lib/planning/`).
+- API routes exceed 30. Then introduce route groups (`app/api/(v1)/` etc).
+- More than one consumer (e.g., a mobile app needs the same backend). Then extract `lib/` to a workspace package.
+
+Until then, monolith is the right call per §0 rule 1.
+
+### 17.12 When to update this file
+
+- Every milestone that ships a new lib module / new table / new API route.
+- Every time the folder tree changes non-trivially.
+- When a convention changes (e.g. swapping from direct Anthropic SDK to Vercel AI Gateway — Phase 5?).
+
+Put the update in the same commit as the code change. Never ship code and update CLAUDE.md in a separate PR — the two will drift.
+
 

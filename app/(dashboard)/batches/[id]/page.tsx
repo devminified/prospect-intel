@@ -3,6 +3,9 @@
 import { use, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase/client'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 
 interface Prospect {
   id: string
@@ -117,96 +120,86 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
     URL.revokeObjectURL(url)
   }
 
-  if (loading) return <div className="text-gray-500">Loading…</div>
-  if (error && !batch) return <div className="text-red-600">{error}</div>
-  if (!batch) return <div className="text-gray-500">Batch not found.</div>
+  if (loading) return <div className="text-muted-foreground">Loading…</div>
+  if (error && !batch) return <div className="text-destructive">{error}</div>
+  if (!batch) return <div className="text-muted-foreground">Batch not found.</div>
 
   return (
-    <div>
-      <div className="mb-6">
-        <Link href="/batches" className="text-sm text-indigo-600 hover:underline">
-          ← All batches
-        </Link>
+    <div className="space-y-6">
+      <div>
+        <Link href="/batches" className="text-sm text-primary hover:underline">← All batches</Link>
         <div className="mt-2 flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">
-              {batch.category} in {batch.city}
-            </h1>
-            <p className="text-sm text-gray-600 mt-1">
+            <h1 className="text-2xl font-bold">{batch.category} in {batch.city}</h1>
+            <p className="text-sm text-muted-foreground mt-1">
               {batch.count_completed} of {batch.count_requested} completed · {batch.status}
             </p>
           </div>
-          <button
-            onClick={exportCsv}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-md font-medium"
-          >
-            Export approved CSV
-          </button>
+          <Button onClick={exportCsv}>Export approved CSV</Button>
         </div>
         {error && (
-          <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-md text-red-700 text-sm">
-            {error}
-          </div>
+          <div className="mt-3 p-3 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-sm">{error}</div>
         )}
       </div>
 
-      <div className="bg-white rounded-lg shadow">
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Prospects</h2>
-          <span className="text-sm text-gray-500">Sorted by opportunity score</span>
-        </div>
-
-        {prospects.length === 0 ? (
-          <div className="p-6 text-center text-gray-500">No prospects in this batch.</div>
-        ) : (
-          <div className="divide-y divide-gray-200">
-            {prospects.map((p) => {
-              const score = p.analyses?.opportunity_score ?? null
-              const angle = p.analyses?.best_angle ?? null
-              return (
-                <Link
-                  key={p.id}
-                  href={`/prospects/${p.id}`}
-                  className="block p-6 hover:bg-gray-50 transition-colors"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-3">
-                        <h3 className="font-medium text-gray-900 truncate">{p.name}</h3>
-                        <StatusChip status={p.status} />
-                      </div>
-                      {angle && (
-                        <p className="mt-2 text-sm text-gray-600 line-clamp-2">{angle}</p>
-                      )}
-                      {p.last_error && (
-                        <p className="mt-2 text-xs text-red-600 line-clamp-2">
-                          <span className="font-mono font-semibold uppercase">{p.failed_stage} failed:</span>{' '}
-                          {p.last_error}
+      <Card>
+        <CardHeader className="flex-row items-center justify-between">
+          <CardTitle>Prospects</CardTitle>
+          <span className="text-sm text-muted-foreground font-normal">Sorted by opportunity score</span>
+        </CardHeader>
+        <CardContent className="p-0">
+          {prospects.length === 0 ? (
+            <div className="p-6 text-center text-muted-foreground text-sm">No prospects in this batch.</div>
+          ) : (
+            <div className="divide-y">
+              {prospects.map((p) => {
+                const score = p.analyses?.opportunity_score ?? null
+                const angle = p.analyses?.best_angle ?? null
+                return (
+                  <Link
+                    key={p.id}
+                    href={`/prospects/${p.id}`}
+                    className="block p-6 hover:bg-muted/50 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-3">
+                          <h3 className="font-medium truncate">{p.name}</h3>
+                          <StatusChip status={p.status} />
+                        </div>
+                        {angle && <p className="mt-2 text-sm text-muted-foreground line-clamp-2">{angle}</p>}
+                        {p.last_error && (
+                          <p className="mt-2 text-xs text-destructive line-clamp-2">
+                            <span className="font-mono font-semibold uppercase">{p.failed_stage} failed:</span>{' '}
+                            {p.last_error}
+                          </p>
+                        )}
+                        <p className="mt-1 text-xs text-muted-foreground/70">
+                          {p.website ?? 'no website'}
+                          {p.rating != null && ` · ${p.rating}★ (${p.review_count ?? 0})`}
                         </p>
-                      )}
-                      <p className="mt-1 text-xs text-gray-400">
-                        {p.website ?? 'no website'}
-                        {p.rating != null && ` · ${p.rating}★ (${p.review_count ?? 0})`}
-                      </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-2xl font-bold">{score ?? '—'}</div>
+                        <div className="text-xs text-muted-foreground">score</div>
+                      </div>
                     </div>
-                    <div className="text-right shrink-0">
-                      <div className="text-2xl font-bold text-gray-900">{score ?? '—'}</div>
-                      <div className="text-xs text-gray-500">score</div>
-                    </div>
-                  </div>
-                </Link>
-              )
-            })}
-          </div>
-        )}
-      </div>
+                  </Link>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }
 
 function StatusChip({ status }: { status: string }) {
-  const color: Record<string, string> = {
-    new: 'bg-gray-100 text-gray-700',
+  // Prospect-status colors — keep distinct hues rather than shadcn variants
+  // because "analyzed" / "enriched" / "ready" need visual differentiation.
+  const cls: Record<string, string> = {
+    new: 'bg-secondary text-secondary-foreground',
     enriched: 'bg-blue-100 text-blue-800',
     analyzed: 'bg-purple-100 text-purple-800',
     ready: 'bg-green-100 text-green-800',
@@ -216,9 +209,7 @@ function StatusChip({ status }: { status: string }) {
     failed: 'bg-red-100 text-red-800',
   }
   return (
-    <span
-      className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${color[status] ?? 'bg-gray-100 text-gray-700'}`}
-    >
+    <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${cls[status] ?? 'bg-secondary text-secondary-foreground'}`}>
       {status}
     </span>
   )

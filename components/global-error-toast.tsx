@@ -8,11 +8,16 @@ import { toast } from '@/components/ui/sonner'
  *
  * Catches errors from THREE sources automatically — no per-page wiring needed:
  *
- * 1. Every `fetch()` call in the browser. We monkey-patch window.fetch once on
- *    mount; if the response is non-2xx and the body is JSON with an `error`
- *    field, we toast it. The original response object is returned untouched,
- *    so existing page code continues to work (it still sees !res.ok and can
- *    setError() for the inline banner).
+ * 1. Every `fetch()` call to OUR OWN /api/* routes. We monkey-patch
+ *    window.fetch once on mount; if the request is to /api/* and the response
+ *    is non-2xx, we toast the JSON error body. The original response object
+ *    is returned untouched, so existing page code continues to work (it still
+ *    sees !res.ok and can setError() for the inline banner).
+ *
+ *    IMPORTANT: we deliberately skip Next.js internals, image optimization,
+ *    and Supabase auth requests. Only user-initiated app API calls trigger
+ *    toasts. Otherwise a cached RSC prefetch 404 or a token-refresh race
+ *    would flood the user with toasts they didn't cause.
  *
  * 2. Unhandled promise rejections (errors thrown from async code that nothing
  *    catches). Safety net for logic bugs.
@@ -29,13 +34,24 @@ export function GlobalErrorToast() {
 
     const originalFetch = window.fetch
 
-    const toastFromResponse = async (res: Response, input: RequestInfo | URL) => {
+    const isOurApi = (input: RequestInfo | URL): boolean => {
+      try {
+        const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url
+        // Same-origin '/api/...' or absolute URL on our origin with /api/...
+        if (raw.startsWith('/api/')) return true
+        if (raw.startsWith(window.location.origin + '/api/')) return true
+        return false
+      } catch {
+        return false
+      }
+    }
+
+    const toastFromResponse = async (res: Response) => {
       try {
         const cloned = res.clone()
         const contentType = cloned.headers.get('content-type') ?? ''
         if (!contentType.includes('application/json')) {
-          const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url
-          toast.error(`${res.status} ${res.statusText || 'Request failed'} — ${url}`)
+          toast.error(`${res.status} ${res.statusText || 'Request failed'}`)
           return
         }
         const body = await cloned.json().catch(() => null)
@@ -48,9 +64,10 @@ export function GlobalErrorToast() {
 
     const patchedFetch: typeof fetch = async (input, init) => {
       const res = await originalFetch(input, init)
-      if (!res.ok) {
-        // Fire and forget — don't block the caller on the toast path.
-        void toastFromResponse(res, input)
+      // Only toast for OUR /api/* routes. Next.js RSC prefetches, image
+      // optimization, and Supabase auth refreshes go through un-toasted.
+      if (!res.ok && isOurApi(input)) {
+        void toastFromResponse(res)
       }
       return res
     }

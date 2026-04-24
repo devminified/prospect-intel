@@ -16,11 +16,13 @@ interface ChannelRecommendation {
   phone_script: string
 }
 
+// Note: Anthropic's structured-output JSON schema does not accept minimum/maximum
+// on integer types (will return 400). Range is enforced at parse time in callSonnet.
 const RECOMMENDATION_SCHEMA = {
   type: 'object',
   properties: {
-    phone_fit_score: { type: 'integer', minimum: 0, maximum: 100 },
-    email_fit_score: { type: 'integer', minimum: 0, maximum: 100 },
+    phone_fit_score: { type: 'integer' },
+    email_fit_score: { type: 'integer' },
     recommended_channel: { type: 'string', enum: ['phone', 'email', 'either'] },
     reasoning: { type: 'string' },
     phone_script: { type: 'string' },

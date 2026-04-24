@@ -19,6 +19,7 @@ export default function BatchesPage() {
   const [category, setCategory] = useState('')
   const [count, setCount] = useState(10)
   const [autoEnrichTopN, setAutoEnrichTopN] = useState(0)
+  const [pitchScoreThreshold, setPitchScoreThreshold] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -64,6 +65,7 @@ export default function BatchesPage() {
           category,
           count,
           auto_enrich_top_n: autoEnrichTopN,
+          pitch_score_threshold: pitchScoreThreshold === '' ? null : Number(pitchScoreThreshold),
         }),
       })
 
@@ -82,6 +84,7 @@ export default function BatchesPage() {
       setCategory('')
       setCount(10)
       setAutoEnrichTopN(0)
+      setPitchScoreThreshold('')
 
     } catch (error: any) {
       setError(error.message)
@@ -147,23 +150,44 @@ export default function BatchesPage() {
             </div>
           </div>
 
-          <div>
-            <label htmlFor="autoEnrich" className="block text-sm font-medium text-gray-700 mb-1">
-              Auto-enrich top N leads with Apollo contacts
-            </label>
-            <input
-              id="autoEnrich"
-              type="number"
-              min="0"
-              max="50"
-              className="w-full md:w-48 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={autoEnrichTopN}
-              onChange={(e) => setAutoEnrichTopN(Math.max(0, parseInt(e.target.value || '0')))}
-            />
-            <p className="mt-1 text-xs text-gray-500">
-              Spends Apollo people-search on the top N by opportunity score. Email reveals stay opt-in
-              per contact on the detail page. Set to 0 to skip entirely.
-            </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="autoEnrich" className="block text-sm font-medium text-gray-700 mb-1">
+                Auto-enrich top N leads with Apollo contacts
+              </label>
+              <input
+                id="autoEnrich"
+                type="number"
+                min="0"
+                max="50"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={autoEnrichTopN}
+                onChange={(e) => setAutoEnrichTopN(Math.max(0, parseInt(e.target.value || '0')))}
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Spends Apollo people-search on the top N by opportunity score. Email reveals stay
+                opt-in per contact. Set to 0 to skip entirely.
+              </p>
+            </div>
+            <div>
+              <label htmlFor="pitchGate" className="block text-sm font-medium text-gray-700 mb-1">
+                Skip pitch below opportunity score
+              </label>
+              <input
+                id="pitchGate"
+                type="number"
+                min="0"
+                max="100"
+                placeholder="e.g. 50 — leave blank to pitch everything"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={pitchScoreThreshold}
+                onChange={(e) => setPitchScoreThreshold(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Cuts Sonnet cost by skipping pitch generation for low-scoring leads you wouldn't
+                personally email.
+              </p>
+            </div>
           </div>
           
           <button

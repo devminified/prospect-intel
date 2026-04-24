@@ -40,10 +40,6 @@ interface MetaAdSignals {
   sample: any[]
 }
 
-interface PressSignals {
-  count: number | null
-  sample: { title: string; source?: string; link?: string; date?: string }[]
-}
 
 export async function auditVisibility(prospectId: string): Promise<void> {
   const { data: prospect, error: pErr } = await supabaseAdmin
@@ -57,11 +53,14 @@ export async function auditVisibility(prospectId: string): Promise<void> {
   const city: string = batch?.city ?? 'unknown'
   const category: string = batch?.category ?? 'business'
 
-  const [gmbSettled, socialSettled, serpSettled, pressSettled] = await Promise.allSettled([
+  // Phase 3 (M18): Google News search dropped — queries on business names
+  // returned noisy generic articles ("Do Beautiful Birds Have an Evolutionary
+  // Advantage?" on a med spa audit). Not worth the SerpApi quota. press_*
+  // fields stay in the schema but are always null going forward.
+  const [gmbSettled, socialSettled, serpSettled] = await Promise.allSettled([
     fetchGmbSignals(prospect.place_id, prospect.rating, prospect.review_count),
     fetchSocialSignals(prospect.website),
     fetchSerpSignals(prospect.name, category, city, prospect.website),
-    fetchPressSignals(prospect.name),
   ])
 
   const gmb = settled(gmbSettled, 'GMB') ?? {
@@ -72,7 +71,6 @@ export async function auditVisibility(prospectId: string): Promise<void> {
   }
   const social = settled(socialSettled, 'social') ?? { links: {}, facebook_page_id: null }
   const serp = settled(serpSettled, 'SerpApi') ?? { rank_main: null, rank_brand: null }
-  const press = settled(pressSettled, 'press') ?? { count: null, sample: [] }
 
   const ads = social.facebook_page_id
     ? await fetchMetaAds(prospect.name, social.facebook_page_id).catch((err) => {
@@ -95,8 +93,8 @@ export async function auditVisibility(prospectId: string): Promise<void> {
     meta_ads_running: ads.running,
     meta_ads_count: ads.count,
     meta_ads_sample_json: ads.sample,
-    press_mentions_count: press.count,
-    press_mentions_sample_json: press.sample,
+    press_mentions_count: null,
+    press_mentions_sample_json: null,
     visibility_summary: null,
     audited_at: new Date().toISOString(),
   }
@@ -287,29 +285,3 @@ async function fetchMetaAds(name: string, _pageId: string): Promise<MetaAdSignal
   }
 }
 
-// ─── Press mentions via Google News (SerpApi) ───────────────────────────────
-
-async function fetchPressSignals(name: string): Promise<PressSignals> {
-  if (!SERPAPI_KEY) return { count: null, sample: [] }
-  const url = new URL('https://serpapi.com/search.json')
-  url.searchParams.set('engine', 'google_news')
-  url.searchParams.set('q', name)
-  url.searchParams.set('api_key', SERPAPI_KEY)
-
-  const res = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) })
-  if (!res.ok) {
-    console.warn('[GoogleNews]', `query failed ${res.status}`)
-    return { count: null, sample: [] }
-  }
-  const data = await res.json()
-  const items = Array.isArray(data?.news_results) ? data.news_results : []
-  return {
-    count: items.length,
-    sample: items.slice(0, 5).map((n: any) => ({
-      title: n.title,
-      source: n.source?.name ?? n.source,
-      link: n.link,
-      date: n.date,
-    })),
-  }
-}

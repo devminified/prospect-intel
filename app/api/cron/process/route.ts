@@ -10,6 +10,7 @@ export const maxDuration = 60
 
 const JOBS_PER_RUN = 10
 const MAX_ATTEMPTS = 3
+const STUCK_JOB_THRESHOLD_MS = 2 * 60 * 1000  // reap running jobs older than 2 min
 
 type JobType = 'enrich' | 'analyze' | 'audit_visibility' | 'pitch' | 'discover_contacts'
 type JobStatus = 'pending' | 'running' | 'done' | 'failed'
@@ -32,6 +33,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const reaped = await reapStuckJobs()
     const claimed = await claimPendingJobs(JOBS_PER_RUN)
 
     let successCount = 0
@@ -64,6 +66,7 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({
+      reaped,
       claimed: claimed.length,
       success: successCount,
       requeued: requeuedCount,
@@ -76,6 +79,27 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     )
   }
+}
+
+/**
+ * Reset any job stuck in 'running' for longer than STUCK_JOB_THRESHOLD_MS
+ * back to 'pending' so the next claim picks it up. Covers the Vercel
+ * FUNCTION_INVOCATION_TIMEOUT case where a prior cron run claimed jobs but
+ * died mid-dispatch without transitioning them to done/pending/failed.
+ */
+async function reapStuckJobs(): Promise<number> {
+  const cutoff = new Date(Date.now() - STUCK_JOB_THRESHOLD_MS).toISOString()
+  const { data, error } = await supabaseAdmin
+    .from('jobs')
+    .update({ status: 'pending' })
+    .eq('status', 'running')
+    .lt('processed_at', cutoff)
+    .select('id')
+  if (error) {
+    console.error('reapStuckJobs failed:', error.message)
+    return 0
+  }
+  return data?.length ?? 0
 }
 
 async function claimPendingJobs(limit: number): Promise<Job[]> {
@@ -131,6 +155,30 @@ async function enqueueNext(job: Job): Promise<void> {
     : null
 
   if (!next) return
+
+  // Phase 3 (M18): optional pitch gate. When a batch was created with
+  // pitch_score_threshold set, skip enqueueing the pitch job for prospects
+  // whose opportunity_score is below that threshold. Saves Sonnet cost on
+  // leads the user wouldn't send a personalized email to anyway.
+  if (next === 'pitch') {
+    const { data: batch } = await supabaseAdmin
+      .from('batches')
+      .select('pitch_score_threshold')
+      .eq('id', job.batch_id)
+      .single()
+    const threshold = (batch as any)?.pitch_score_threshold
+    if (threshold != null) {
+      const { data: analysis } = await supabaseAdmin
+        .from('analyses')
+        .select('opportunity_score')
+        .eq('prospect_id', job.prospect_id)
+        .single()
+      const score = (analysis as any)?.opportunity_score ?? 0
+      if (score < threshold) {
+        return // below threshold — skip the pitch for this prospect
+      }
+    }
+  }
 
   const { error } = await supabaseAdmin.from('jobs').insert({
     batch_id: job.batch_id,

@@ -448,7 +448,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
             </p>
           )}
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
             <Stat
               label="GMB rating"
               value={audit.gmb_rating != null ? `${audit.gmb_rating}★` : '—'}
@@ -463,11 +463,6 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
               label="Rank — brand"
               value={audit.serp_rank_brand != null ? `#${audit.serp_rank_brand}` : 'not ranking'}
               sub="own name"
-            />
-            <Stat
-              label="Press mentions"
-              value={audit.press_mentions_count != null ? `${audit.press_mentions_count}` : '—'}
-              sub="Google News"
             />
           </div>
 
@@ -506,26 +501,6 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
             </div>
           )}
 
-          {audit.press_mentions_sample_json && audit.press_mentions_sample_json.length > 0 && (
-            <div>
-              <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Recent mentions</div>
-              <ul className="space-y-1 text-sm">
-                {audit.press_mentions_sample_json.slice(0, 5).map((m, i) => (
-                  <li key={i}>
-                    <a
-                      href={m.link}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-indigo-600 hover:underline line-clamp-1"
-                    >
-                      {m.title}
-                    </a>
-                    {m.source && <span className="text-xs text-gray-500 ml-2">— {m.source}</span>}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
         </div>
       )}
 

@@ -44,6 +44,7 @@ next-env.d.ts
 # playwright (from MCP-driven local QA)
 .playwright-mcp/
 m*-*.png
+e2e-*.png
 
 # supabase CLI
 supabase/.temp/

@@ -905,3 +905,163 @@ With `pitch_score_threshold=50` filtering out ~30% of leads, Anthropic drops by 
 - GMB Posts / Reviews API write-back. Purely read.
 - LinkedIn Sales Navigator scraping. Still a ToS landmine.
 
+---
+
+## 16. Phase 4A — Daily Lead Planner (M20)
+
+Phase 3 made the pipeline efficient. Phase 4A adds an **advisor layer** on top: instead of the user deciding each morning which city + category to run, a daily plan pops up saying *"Today, run these 3-5 batches (city, category, count) for these reasons."* The user reviews and executes with one click.
+
+**Phase 4A is scoped tight on purpose.** Only LLM + seasonality + ICP. No Google Trends, no performance-feedback loop, no cron auto-generation, no reply classifier. Those are 4B/4C.
+
+### 16.0 Defaults locked in for 4A
+
+User deferred 6 of 8 decision points to "whatever sensible for 4A". The locked defaults:
+
+| Decision | 4A default | Revisit in |
+|---|---|---|
+| Live market signals (Google Trends / news) | skip | 4C |
+| Reply tracking | manual status dropdown only (existing) | 4B (Instantly API) |
+| Plan generation cadence | manual trigger only ("Generate today's plan" button) | 4C (08:00 UTC cron) |
+| Auto-execute | per-plan "Execute all" button; also per-item "Run this one" | — |
+| Category scope | unbounded via user's `icp_profile.target_categories` array | — |
+| Performance feedback to LLM | skip for 4A | 4B |
+| ICP fields | services, avg_deal_size, daily_capacity (hard cap), preferred_cities, excluded_cities, min_gmb_rating, min_review_count, target_categories | — |
+| Daily capacity cap | the `daily_capacity` field on the ICP is the hard cap across all items in a plan | — |
+
+### 16.1 Data model additions
+
+Migration `20260424120000_plans.sql`:
+
+```sql
+create table icp_profile (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  services text[] not null default '{}',
+  avg_deal_size int,
+  daily_capacity int not null default 0,   -- 0 means no hard cap
+  preferred_cities text[] not null default '{}',
+  excluded_cities text[] not null default '{}',
+  min_gmb_rating numeric,
+  min_review_count int,
+  target_categories text[] not null default '{}',
+  updated_at timestamptz not null default now()
+);
+
+create table lead_plans (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  plan_date date not null,
+  status text not null default 'draft', -- draft | executed | skipped
+  rationale_json jsonb,                  -- planner's overall reasoning + signals used
+  created_at timestamptz not null default now(),
+  executed_at timestamptz
+);
+create index on lead_plans(user_id, plan_date desc);
+
+create table lead_plan_items (
+  id uuid primary key default gen_random_uuid(),
+  plan_id uuid not null references lead_plans(id) on delete cascade,
+  city text not null,
+  category text not null,
+  count int not null,
+  reasoning text,                        -- per-item reason string
+  priority int not null default 0,       -- 1 = highest, rendered in that order
+  estimated_cost_usd numeric,            -- rough cost estimate for the item
+  batch_id uuid references batches(id) on delete set null,  -- populated after execute
+  executed_at timestamptz
+);
+create index on lead_plan_items(plan_id, priority);
+```
+
+RLS on both tables, same pattern as batches (user owns rows where `user_id = auth.uid()`). `icp_profile` RLS is trivially `auth.uid() = user_id`.
+
+### 16.2 Seasonality calendar
+
+Hardcoded in `lib/seasonality.ts` — no DB table. One exported array of ~30 common SMB categories × peak months with brief rationale. Seed on first write of the module; edit by PR if needed. Example entries:
+
+```ts
+{ category: 'med spas',        peak_months: [4, 5, 10, 11], reason: 'Pre-summer prep and pre-holiday gifting drive botox/filler demand.' }
+{ category: 'tax preparation', peak_months: [1, 2, 3, 4],    reason: 'Q1 tax season is the entire business year for these firms.' }
+{ category: 'landscaping',     peak_months: [3, 4, 5, 9],    reason: 'Spring cleanup and fall yard prep.' }
+{ category: 'HVAC',            peak_months: [5, 6, 7, 11, 12], reason: 'Summer AC + winter heat peaks.' }
+{ category: 'wedding planners', peak_months: [1, 2, 8],      reason: 'Engagement season Dec/Jan; planning typically 12-18 months out.' }
+// ...~30 total
+```
+
+### 16.3 Folder additions
+
+```
+lib/
+├── seasonality.ts            ← NEW: static category calendar
+├── plans.ts                  ← NEW: generatePlan(userId), executePlan(planId, userId)
+└── prompts.ts                ← plannerPrompt() added
+
+app/(dashboard)/
+├── settings/
+│   └── icp/page.tsx          ← NEW: one-page ICP form
+└── plans/
+    ├── page.tsx              ← NEW: list of past plans
+    └── [id]/page.tsx         ← NEW: plan detail + execute button
+
+app/api/
+├── icp/route.ts              ← NEW: GET + PATCH
+├── plans/route.ts            ← NEW: POST = generate today's plan
+└── plans/[id]/execute/route.ts ← NEW: creates batches from plan items
+```
+
+### 16.4 Planner prompt (Opus 4.7)
+
+Takes the ICP, today's date, seasonality table, plus a handful of recent batch summaries (counts by city+category) for light context. Returns structured JSON:
+
+```json
+{
+  "rationale": "one-paragraph summary of why this plan for today",
+  "items": [
+    {
+      "priority": 1,
+      "city": "Austin",
+      "category": "med spas",
+      "count": 20,
+      "reasoning": "Late April is peak pre-summer botox demand; Austin is in your preferred cities and high GMB density for this category."
+    }
+  ]
+}
+```
+
+Model: `claude-opus-4-7` · `thinking: {type: 'adaptive'}` · `output_config: {effort: 'medium', format: {type: 'json_schema', schema: ...}}`. Temperature parameter removed on Opus 4.7. Structured output enforces the schema.
+
+### 16.5 Execute flow
+
+`POST /api/plans/[id]/execute` loops items, calls the existing batch-create logic for each. Each `lead_plan_items.batch_id` gets populated. Plan status flips to `executed`. Partial execution allowed (per-item button = one call).
+
+### 16.6 Milestone plan
+
+**M20 — Planner module ships as one cohesive milestone.** Deliverables:
+
+1. Migration applied; RLS verified
+2. `lib/seasonality.ts` seeded with ~30 categories
+3. `lib/plans.ts` with `generatePlan(userId)` + `executePlan(planId, userId)`
+4. `lib/prompts.ts` gets `plannerPrompt()`
+5. Three UI pages + three API routes
+6. Test: ICP filled → "Generate today's plan" → 3-5 items returned → "Execute all" → N batches land in /batches list → existing pipeline runs them
+
+✅ Verify end-to-end: a plan generated on April 24 for a mobile/web + AI agency ICP returns category recommendations that *reflect that date* — e.g. med spas should surface because April is pre-summer; should NOT surface wedding planners (off-peak).
+
+### 16.7 Definition of Done (Phase 4A)
+
+- [ ] New user lands on `/settings/icp`, fills form, saves.
+- [ ] Clicks "Generate today's plan" → within 15s gets 3-5 items with rationale.
+- [ ] Clicks "Execute" → batches created in /batches list with the planned city/category/count.
+- [ ] Daily capacity cap enforced: total count across items ≤ `icp_profile.daily_capacity`.
+- [ ] Planner never recommends a category outside `icp_profile.target_categories` or a city in `excluded_cities`.
+- [ ] No cron auto-runs (4A scope).
+- [ ] Total code including Phase 4A stays under **7000 lines**.
+
+### 16.8 Out of scope (Phase 4B / 4C)
+
+- Reply-rate feedback into planner (4B)
+- Instantly / Smartlead API integration (4B)
+- Google Trends / News momentum signals via SerpApi (4C)
+- Daily 08:00 UTC cron auto-generation (4C)
+- Reply-email classifier (Haiku) (4C)
+- Multi-user shared plan calendar (still single-user)
+

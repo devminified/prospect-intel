@@ -163,7 +163,13 @@ export async function POST(
     appOrigin,
     sentEmailId: sentRow.id,
     unsubToken: b64url(primary.id),
-    senderName: account.display_name ?? undefined,
+    signature: {
+      sender_name: account.display_name,
+      sender_title: account.sender_title,
+      sender_company: account.sender_company,
+      calendly_url: account.calendly_url,
+      website_url: account.website_url,
+    },
   })
 
   // 10. Send

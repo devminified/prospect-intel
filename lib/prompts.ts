@@ -82,6 +82,9 @@ RULES
 - NEVER use "synergy", "leverage", "cutting-edge", "solutions provider".
 - Reference the specific evidence, not the generic category.
 - No jargon.
+- DO NOT include a signature line or sign-off ("— Name", "Best,", "Cheers,", "Thanks," etc).
+  The email template adds a signature block separately. Ending the body with a signature
+  duplicates it. Just end with the CTA sentence.
 - CRITICAL: if BOOKING STATUS starts with "has online booking" or "has Book Now button",
   the business already HAS online booking. Do NOT suggest adding online booking. Pick a
   different pain to lead with instead (AI chatbot for after-hours inquiries, ecommerce

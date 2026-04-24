@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
-import { searchPlaces } from '@/lib/places'
+import { searchPlaces, filterDuplicatePlaces } from '@/lib/places'
 import { enqueueJob } from '@/lib/queue'
 
 interface CreateBatchRequest {
@@ -76,23 +76,28 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Limit to requested count
-    const limitedPlaces = places.slice(0, count)
+    // Skip prospects already in the system (same place_id). Avoids re-paying
+    // Google Places + the full pipeline on leads the user has seen before.
+    const { fresh, skipped: duplicatesSkipped } = await filterDuplicatePlaces(places)
+    const limitedPlaces = fresh.slice(0, count)
 
     if (limitedPlaces.length === 0) {
       // Mark batch as done but with no results
       await supabaseAdmin
         .from('batches')
-        .update({ 
+        .update({
           status: 'done',
-          count_completed: 0
+          count_completed: 0,
         })
         .eq('id', batch.id)
 
       return NextResponse.json({
         batch,
-        message: 'No places found for the given criteria',
-        prospects_created: 0
+        message: duplicatesSkipped > 0
+          ? `All ${places.length} matches already exist in your system.`
+          : 'No places found for the given criteria',
+        prospects_created: 0,
+        duplicates_skipped: duplicatesSkipped,
       })
     }
 
@@ -142,10 +147,12 @@ export async function POST(request: NextRequest) {
         .eq('id', batch.id)
     }
 
+    const dupMsg = duplicatesSkipped > 0 ? ` (${duplicatesSkipped} duplicates skipped)` : ''
     return NextResponse.json({
       batch,
       prospects_created: prospects.length,
-      message: `Created ${prospects.length} prospects and queued enrichment jobs`,
+      duplicates_skipped: duplicatesSkipped,
+      message: `Created ${prospects.length} prospects and queued enrichment jobs${dupMsg}`,
     })
 
   } catch (error) {

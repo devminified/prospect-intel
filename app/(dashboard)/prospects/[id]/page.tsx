@@ -85,6 +85,7 @@ interface Detail {
     rating: number | null
     review_count: number | null
     categories_text: string | null
+    filter_reason: string | null
   }
   enrichment: {
     tech_stack_json: any
@@ -113,7 +114,7 @@ interface Detail {
   sentEmail: SentEmail | null
 }
 
-const PROSPECT_STATUSES = ['new', 'enriched', 'analyzed', 'ready', 'contacted', 'replied', 'rejected']
+const PROSPECT_STATUSES = ['new', 'enriched', 'analyzed', 'ready', 'contacted', 'replied', 'rejected', 'filtered_out']
 
 const PITCH_STATUS_CLS: Record<string, string> = {
   approved: 'bg-green-100 text-green-800 hover:bg-green-100',
@@ -400,6 +401,13 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
 
       {error && (
         <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-sm">{error}</div>
+      )}
+
+      {prospect.status === 'filtered_out' && prospect.filter_reason && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-md text-amber-900 text-sm">
+          <span className="font-semibold">Filtered out:</span> {prospect.filter_reason}
+          <span className="ml-2 text-amber-700">— no pitch was generated. Change your ICP filters to re-include.</span>
+        </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

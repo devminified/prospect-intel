@@ -1,4 +1,5 @@
 import { ExternalAPIError } from './errors'
+import { supabaseAdmin } from './supabase/server'
 
 if (!process.env.GOOGLE_PLACES_API_KEY) {
   throw new Error('Missing env.GOOGLE_PLACES_API_KEY')
@@ -127,4 +128,42 @@ function extractSnippet(body: string): string {
   } catch {
     return body.slice(0, 200) || 'no body'
   }
+}
+
+/**
+ * Given Google Places search results, filter out any place_id that already
+ * exists as a prospect in the DB. Returns the fresh subset plus a count of
+ * skipped duplicates so the caller can surface it to the user.
+ *
+ * Useful when re-running "med spas in Austin" after you already ran it — the
+ * second batch shouldn't re-pay Google Places + the pipeline on prospects you
+ * already analyzed and pitched.
+ *
+ * Note: prospects.place_id is globally unique at the DB level, so this
+ * pre-filter mirrors what would happen at insert time — but catches it early
+ * so the caller can return an accurate prospects_created count.
+ */
+export async function filterDuplicatePlaces(
+  places: PlaceSearchResult[]
+): Promise<{ fresh: PlaceSearchResult[]; skipped: number }> {
+  if (places.length === 0) return { fresh: [], skipped: 0 }
+
+  const ids = places.map((p) => p.place_id).filter(Boolean)
+  if (ids.length === 0) return { fresh: places, skipped: 0 }
+
+  const { data, error } = await supabaseAdmin
+    .from('prospects')
+    .select('place_id')
+    .in('place_id', ids)
+
+  if (error) {
+    // Be permissive on lookup failure — the DB unique constraint will catch
+    // dupes at insert time. Just log and continue.
+    console.warn('filterDuplicatePlaces lookup failed:', error.message)
+    return { fresh: places, skipped: 0 }
+  }
+
+  const existing = new Set((data ?? []).map((r: any) => r.place_id as string))
+  const fresh = places.filter((p) => !existing.has(p.place_id))
+  return { fresh, skipped: places.length - fresh.length }
 }

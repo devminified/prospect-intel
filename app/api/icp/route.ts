@@ -50,6 +50,10 @@ export async function PATCH(request: NextRequest) {
     min_gmb_rating: body.min_gmb_rating != null ? Number(body.min_gmb_rating) : null,
     min_review_count: body.min_review_count != null ? Number(body.min_review_count) : null,
     target_categories: Array.isArray(body.target_categories) ? body.target_categories.filter((s: any) => typeof s === 'string' && s.trim()) : [],
+    require_linkedin: !!body.require_linkedin,
+    require_instagram: !!body.require_instagram,
+    require_facebook: !!body.require_facebook,
+    require_business_phone: !!body.require_business_phone,
     updated_at: new Date().toISOString(),
   }
 

@@ -48,3 +48,27 @@ After 30 days of real sends + replies:
 1. `/plans` shows a populated performance table
 2. The next auto-generated plan's rationale references specific interested/unsub rates by (category, city)
 3. Green-highlighted rows show up in plan items; red-highlighted combos do NOT
+
+## Post-ship improvements (2026-04-25)
+
+Two quality-of-life gaps closed before the pause for data collection. Not full milestones, just hygiene.
+
+### Duplicate detection on new batches
+
+New `filterDuplicatePlaces()` helper in `lib/places.ts`. Both `POST /api/batches` and `createBatchForPlanItem` (used when executing a plan item) now pre-check Google Places results against existing `prospects.place_id` rows and filter duplicates out before inserting. Response includes `duplicates_skipped` count. Avoids re-paying Google Places + the full pipeline on prospects the user has already seen.
+
+**Known tradeoff:** since `prospects.place_id` is globally unique (not per-user), this dedup is cross-tenant. Single-user today so it's correct. When multi-user ships, the unique constraint + the filter both need to scope by `batches.user_id`.
+
+### Optional ICP hard filters (social presence)
+
+Migration `20260425180000_icp_social_and_filter.sql` adds four booleans to `icp_profile` (`require_linkedin`, `require_instagram`, `require_facebook`, `require_business_phone`) and one column to `prospects` (`filter_reason`).
+
+Gate runs in `app/api/cron/process/route.ts::enqueueNext` at the audit-done → pitch boundary, right after the existing `pitch_score_threshold` check. If any required signal is missing, the prospect's status flips to `filtered_out`, `filter_reason` records why (e.g. "ICP requires LinkedIn + Instagram — none found"), and the pitch job is never enqueued.
+
+- **LinkedIn** passes if business social_links_json.linkedin is set OR any contact has a `linkedin_url`
+- **Instagram / Facebook** pass if business-level audit found the respective social link
+- **Business phone** passes if `prospects.phone` (from Google Places) is non-null
+
+UI: `/settings/icp` gets a "Hard filters" block with 4 toggle rows + help text. Prospect detail surfaces an amber callout under the header when `status='filtered_out'`, explaining the reason.
+
+Deliberately NOT added: Twitter/X, Threads, TikTok requirements (not useful for B2B SMB outreach). Multi-platform OR logic (kept AND-only for clarity).

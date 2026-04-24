@@ -163,7 +163,7 @@ async function enqueueNext(job: Job): Promise<void> {
   if (next === 'pitch') {
     const { data: batch } = await supabaseAdmin
       .from('batches')
-      .select('pitch_score_threshold')
+      .select('user_id, pitch_score_threshold')
       .eq('id', job.batch_id)
       .single()
     const threshold = (batch as any)?.pitch_score_threshold
@@ -178,6 +178,22 @@ async function enqueueNext(job: Job): Promise<void> {
         return // below threshold — skip the pitch for this prospect
       }
     }
+
+    // M27 (hygiene): optional ICP social requirements gate. If the user's ICP
+    // requires LinkedIn / Instagram / Facebook / business phone, check the
+    // visibility audit + contacts + prospect row. Anything missing → mark
+    // prospect filtered_out with a human-readable reason, skip the pitch.
+    const userId = (batch as any)?.user_id
+    if (userId) {
+      const filterReason = await checkSocialIcpGate(userId, job.prospect_id)
+      if (filterReason) {
+        await supabaseAdmin
+          .from('prospects')
+          .update({ status: 'filtered_out', filter_reason: filterReason })
+          .eq('id', job.prospect_id)
+        return
+      }
+    }
   }
 
   const { error } = await supabaseAdmin.from('jobs').insert({
@@ -188,6 +204,54 @@ async function enqueueNext(job: Job): Promise<void> {
     attempts: 0,
   })
   if (error) console.error(`Failed to enqueue ${next} job:`, error.message)
+}
+
+/**
+ * Check the user's ICP social requirements against the prospect's audit +
+ * contacts + row. Returns a reason string if the prospect should be filtered
+ * out, or null if all requirements pass.
+ *
+ * LinkedIn: business-level OR any contact with linkedin_url satisfies.
+ * Instagram/Facebook: business-level only (from visibility_audits.social_links_json).
+ * Business phone: prospects.phone (from Google Places) must be non-null.
+ */
+async function checkSocialIcpGate(userId: string, prospectId: string): Promise<string | null> {
+  const { data: icp } = await supabaseAdmin
+    .from('icp_profile')
+    .select('require_linkedin, require_instagram, require_facebook, require_business_phone')
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (!icp) return null
+
+  const reqLinkedin = !!(icp as any).require_linkedin
+  const reqInstagram = !!(icp as any).require_instagram
+  const reqFacebook = !!(icp as any).require_facebook
+  const reqPhone = !!(icp as any).require_business_phone
+
+  if (!reqLinkedin && !reqInstagram && !reqFacebook && !reqPhone) return null
+
+  const [auditRes, contactsRes, prospectRes] = await Promise.all([
+    supabaseAdmin.from('visibility_audits').select('social_links_json').eq('prospect_id', prospectId).maybeSingle(),
+    supabaseAdmin.from('contacts').select('linkedin_url').eq('prospect_id', prospectId),
+    supabaseAdmin.from('prospects').select('phone').eq('id', prospectId).maybeSingle(),
+  ])
+
+  const socialLinks = ((auditRes.data as any)?.social_links_json ?? {}) as Record<string, string | null>
+  const contacts = (contactsRes.data as any[]) ?? []
+  const phone = (prospectRes.data as any)?.phone ?? null
+
+  const missing: string[] = []
+  if (reqLinkedin) {
+    const businessLi = socialLinks.linkedin
+    const anyContactLi = contacts.some((c) => c.linkedin_url)
+    if (!businessLi && !anyContactLi) missing.push('LinkedIn')
+  }
+  if (reqInstagram && !socialLinks.instagram) missing.push('Instagram')
+  if (reqFacebook && !socialLinks.facebook) missing.push('Facebook')
+  if (reqPhone && !phone) missing.push('business phone')
+
+  if (missing.length === 0) return null
+  return `ICP requires ${missing.join(' + ')} — none found`
 }
 
 async function markJobDone(jobId: string): Promise<void> {

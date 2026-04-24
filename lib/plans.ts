@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { plannerPrompt } from '@/lib/prompts'
 import { calendarForCategories } from '@/lib/seasonality'
-import { searchPlaces } from '@/lib/places'
+import { searchPlaces, filterDuplicatePlaces } from '@/lib/places'
 import { enqueueJob } from '@/lib/queue'
 
 if (!process.env.ANTHROPIC_API_KEY) {
@@ -315,7 +315,10 @@ export async function executePlanItem(itemId: string, userId: string): Promise<s
 
 async function createBatchForPlanItem(userId: string, city: string, category: string, count: number): Promise<string> {
   const places = await searchPlaces(category, city)
-  const limited = places.slice(0, count)
+  // Skip prospects already in the system (same place_id). The planner might
+  // re-suggest med spas in Austin a second time — new leads only.
+  const { fresh } = await filterDuplicatePlaces(places)
+  const limited = fresh.slice(0, count)
 
   const { data: batch, error: batchErr } = await supabaseAdmin
     .from('batches')

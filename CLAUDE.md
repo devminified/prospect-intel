@@ -81,7 +81,7 @@ Per-task playbooks in `docs/playbooks/`:
 - **M21** — shadcn/ui migration across all 9 dashboard pages + CLAUDE.md restructure.
 - **M22** — On-demand channel-fit recommendation per prospect (Sonnet scores phone vs email + writes cold-call opening script). New `channel_recommendations` table, `POST /api/prospects/:id/recommend-channel`, UI panel on prospect detail, CSV export columns added.
 - **Phase 4B (M23–M24)** — Zoho send + open tracking + unsubscribe + reply polling + Haiku classifier. Post-ship: sender signature + Calendly + Devminified branding on outbound. `archive/phase-4b-outbound.md`
-- **Phase 4C (M25–M26)** — Reply-outcome feedback into planner + daily 08:00 UTC auto-gen cron. `archive/phase-4c-learning.md`
+- **Phase 4C (M25–M26)** — Reply-outcome feedback into planner + daily 08:00 UTC auto-gen cron. Post-ship: duplicate-prospect detection on new batches + optional ICP hard filters (LinkedIn, Instagram, Facebook, business phone) that filter at the audit-done boundary. `archive/phase-4c-learning.md`
 
 **Active:** see `docs/phases/CURRENT.md`. Today: none.
 

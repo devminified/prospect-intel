@@ -18,6 +18,10 @@ interface Icp {
   min_gmb_rating: number | null
   min_review_count: number | null
   target_categories: string[]
+  require_linkedin: boolean
+  require_instagram: boolean
+  require_facebook: boolean
+  require_business_phone: boolean
 }
 
 const EMPTY: Icp = {
@@ -29,6 +33,10 @@ const EMPTY: Icp = {
   min_gmb_rating: null,
   min_review_count: null,
   target_categories: [],
+  require_linkedin: false,
+  require_instagram: false,
+  require_facebook: false,
+  require_business_phone: false,
 }
 
 export default function IcpSettingsPage() {
@@ -177,6 +185,43 @@ export default function IcpSettingsPage() {
           <Separator />
 
           <div>
+            <div className="text-xs font-semibold uppercase text-muted-foreground mb-1">Hard filters (optional)</div>
+            <p className="text-xs text-muted-foreground mb-3">
+              Prospects missing a required signal get marked <code className="text-xs">filtered_out</code> after
+              the visibility audit — no pitch is generated. Reason is surfaced on the prospect detail.
+              Turn on only what you actually need to filter for.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <ToggleRow
+                label="Require LinkedIn"
+                help="Business page OR at least one contact with a LinkedIn URL"
+                checked={icp.require_linkedin}
+                onChange={(v) => setIcp({ ...icp, require_linkedin: v })}
+              />
+              <ToggleRow
+                label="Require Instagram"
+                help="Business Instagram link discovered during the audit"
+                checked={icp.require_instagram}
+                onChange={(v) => setIcp({ ...icp, require_instagram: v })}
+              />
+              <ToggleRow
+                label="Require Facebook"
+                help="Business Facebook link discovered during the audit"
+                checked={icp.require_facebook}
+                onChange={(v) => setIcp({ ...icp, require_facebook: v })}
+              />
+              <ToggleRow
+                label="Require business phone"
+                help="Phone number from Google Places (must be non-null)"
+                checked={icp.require_business_phone}
+                onChange={(v) => setIcp({ ...icp, require_business_phone: v })}
+              />
+            </div>
+          </div>
+
+          <Separator />
+
+          <div>
             <Button onClick={save} disabled={saving}>
               {saving ? 'Saving…' : 'Save ICP'}
             </Button>
@@ -210,6 +255,35 @@ function CsvField({
       />
       {help && <p className="text-xs text-muted-foreground">{help}</p>}
     </div>
+  )
+}
+
+function ToggleRow({
+  label, help, checked, onChange,
+}: {
+  label: string
+  help?: string
+  checked: boolean
+  onChange: (v: boolean) => void
+}) {
+  const id = `toggle-${label.replace(/\s+/g, '-').toLowerCase()}`
+  return (
+    <label
+      htmlFor={id}
+      className="flex items-start gap-3 p-3 rounded-md border hover:bg-muted/40 cursor-pointer transition-colors"
+    >
+      <input
+        id={id}
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 h-4 w-4 rounded border-input accent-primary"
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium">{label}</div>
+        {help && <div className="text-xs text-muted-foreground mt-0.5">{help}</div>}
+      </div>
+    </label>
   )
 }
 

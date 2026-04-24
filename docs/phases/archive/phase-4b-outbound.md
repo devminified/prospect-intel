@@ -51,3 +51,15 @@ Migration `20260425140000_email_poll_state.sql`:
 - Zoho Workspace: no added cost (user's existing seat)
 - Haiku reply classifier: ~$0.001 per reply · at ~50 replies/mo ≈ $0.05/mo
 - No new infrastructure — all crons run on existing Vercel Pro
+
+## Post-ship improvements (2026-04-25)
+
+Sender signature + Calendly + Devminified branding on outbound pitches, shipped after Phase 4C to polish the sending experience before the learning loop accumulates data.
+
+- **Migration `20260425160000_sender_signature.sql`** adds four nullable columns on `email_accounts`: `sender_title`, `sender_company`, `calendly_url`, `website_url`.
+- **`lib/email/templates.ts`** rewritten to render a proper signature block below the pitch body — name (bold), title · company, then Calendly link + website link, separated from the body by a subtle 1px border. 560px max-width container with system-font stack + 15px/1.6 line height for readable typography on desktop and mobile.
+- **Pitch prompt** updated with an explicit rule: `DO NOT include a signature line or sign-off ("— Name", "Best,", "Cheers,", etc)`. The template owns the signature; Sonnet was sometimes adding its own, which duplicated.
+- **`/settings/email`** gains an Email signature card with four inputs + a live preview that renders exactly how the block will appear in outgoing mail. Defaults seed `company='Devminified'` and `website='https://devminified.com'` so first-time setup is one click.
+- **Send route** reads the four signature fields from the account row and passes them via the new `EmailSignatureInput` type.
+
+Design constraint (carry forward): **no images, no emoji, no color banners, no multi-column layouts in outbound pitches.** Cold-email spam filters punish all of those. Only the 1×1 tracking pixel + text-based signature. If future milestones want a "branded template" option, gate it behind a settings toggle and A/B-test reply-rate impact before defaulting it on.

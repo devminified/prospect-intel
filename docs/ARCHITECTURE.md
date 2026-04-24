@@ -13,11 +13,11 @@ Next.js on Vercel (one app, one deployable)
   └── lib/                    ← shared server logic
        │
        ▼
-  Vercel Cron → GET /api/cron/process (every 2 min on Pro)
-                  ├─ reaps jobs stuck in `running` > 2 min
-                  ├─ atomically claims up to 10 pending jobs
-                  ├─ dispatches each: enrich | analyze | audit_visibility | discover_contacts | pitch
-                  └─ chains next stage on success; retries with back-off on failure (3 attempts)
+  Vercel Cron (three schedules):
+    ├─ */2  → /api/cron/process       (pipeline driver)
+    │         reaps stuck-running jobs, claims pending, dispatches + chains
+    ├─ */10 → /api/cron/read-replies  (inbox poll + Haiku classify)
+    └─ 0 8  → /api/cron/daily-plan    (auto-gen today's plan at 08:00 UTC)
        │
        ▼
   Supabase (Postgres + Auth + RLS)
@@ -76,6 +76,14 @@ prospect-intel/
 │   │   ├── prospects/[id]/contacts/[contactId]/reveal/route.ts ← POST: reveal email
 │   │   ├── prospects/[id]/recommend-channel/route.ts ← POST: Sonnet channel fit + phone script
 │   │   ├── prospects/[id]/regenerate-pitch/route.ts  ← POST: re-run Sonnet
+│   │   ├── pitches/[id]/send/route.ts                ← POST: send via Zoho, log sent_emails
+│   │   ├── auth/zoho/authorize/route.ts              ← GET: start Zoho OAuth, set state cookie
+│   │   ├── auth/zoho/callback/route.ts               ← GET: exchange code, store tokens
+│   │   ├── track/open/[id]/route.ts                  ← GET: 1x1 PNG + log email_opens
+│   │   ├── unsub/route.ts                            ← GET: public unsubscribe page
+│   │   ├── performance/route.ts                      ← GET: per-(category,city) reply aggregates
+│   │   ├── cron/read-replies/route.ts                ← GET */10: poll inbox + classify replies
+│   │   ├── cron/daily-plan/route.ts                  ← GET 0 8 * * *: auto-gen today's plan
 │   │   └── test/                                     ← CRON_SECRET-gated per-stage invokers
 │   │       ├── analyze-one/route.ts
 │   │       ├── audit-one/route.ts
@@ -83,7 +91,8 @@ prospect-intel/
 │   │       ├── enrich-demo/route.ts
 │   │       ├── enrich-one/route.ts
 │   │       ├── pitch-one/route.ts
-│   │       └── recommend-one/route.ts
+│   │       ├── recommend-one/route.ts
+│   │       └── replies-one/route.ts
 │   ├── layout.tsx                                    ← root <html>
 │   └── page.tsx                                      ← redirects "/" → "/batches"
 ├── components/ui/                                    ← shadcn primitives (Base UI + Tailwind)
@@ -99,9 +108,13 @@ prospect-intel/
 │   │   └── groq.ts                                   ← bulk summarization only
 │   ├── pitch.ts                                      ← Sonnet: 4-sentence cold email, upsertable
 │   ├── places.ts                                     ← Google Places (New): Text Search + Details
-│   ├── plans.ts                                      ← planner (Opus) + executePlan
+│   ├── plans.ts                                      ← planner (Opus) + executePlan + computeRecentPerformance
 │   ├── prompts.ts                                    ← SINGLE source of truth for prompt templates
 │   ├── recommend.ts                                  ← Sonnet: channel fit scores + phone script
+│   ├── email/
+│   │   ├── zoho.ts                                   ← Zoho OAuth + Mail API wrapper (send, folders, list)
+│   │   ├── templates.ts                              ← HTML email builder + signature block + unsub token
+│   │   └── replies.ts                                ← pollReplies: inbox poll + match + Haiku classify
 │   ├── queue.ts                                      ← enqueueJob / getNextJobs / markJob* helpers
 │   ├── scrape/
 │   │   └── scrapingbee.ts                            ← renderPage + extractTypedFields
@@ -117,7 +130,10 @@ prospect-intel/
 │   ├── 20260423000000_visibility_audits.sql          ← M13 visibility_audits + RLS
 │   ├── 20260424000000_phase3.sql                     ← M18: score threshold, auto_enrich, scraped_data
 │   ├── 20260424120000_plans.sql                      ← M20: icp_profile, lead_plans, lead_plan_items
-│   └── 20260424180000_channel_recommendations.sql    ← M22: channel_recommendations
+│   ├── 20260424180000_channel_recommendations.sql    ← M22: channel_recommendations
+│   ├── 20260425120000_email.sql                      ← M23: email_accounts, sent_emails, opens, replies, unsubs
+│   ├── 20260425140000_email_poll_state.sql           ← M24: last_poll_at, inbox_folder_id, replies unique index
+│   └── 20260425160000_sender_signature.sql           ← post-M26: signature fields on email_accounts
 ├── .env.local.example                                ← all env keys, empty values
 ├── .mcp.json                                         ← Playwright MCP for local QA
 ├── vercel.json                                       ← cron schedule */2 * * * *
@@ -154,6 +170,11 @@ Six core tables — see `supabase/migrations/20260420181100_init.sql` for the au
 - **`visibility_audits`** — one per prospect. Fields: gmb_*, social_links_json, follower counts, serp_rank_main, serp_rank_brand, meta_ads_*, visibility_summary
 - **`pitches`** — Sonnet output. Fields: subject, body, edited_body, status (draft | approved | sent | replied), timestamps
 - **`channel_recommendations`** — on-demand, one per prospect. Fields: phone_fit_score, email_fit_score, recommended_channel (phone | email | either), reasoning, phone_script, generated_at
+- **`email_accounts`** — connected Zoho accounts (OAuth). Fields: user_id, email, display_name, zoho_account_id, api_domain, access_token, refresh_token, token_expires_at, daily_send_cap, sends_today, sends_reset_at, last_send_at, last_poll_at, inbox_folder_id, **sender_title, sender_company, calendly_url, website_url** (signature fields — rendered in every outbound pitch's signature block)
+- **`sent_emails`** — one row per send. Fields: pitch_id, contact_id, account_id, message_id, thread_id, subject, body_html, to_email, bounced, bounce_reason, sent_at
+- **`email_opens`** — tracking-pixel hits. Fields: sent_email_id, opened_at, ip, user_agent, is_probably_mpp (true if hit <10s after send — likely Apple MPP or Gmail proxy, not a real read)
+- **`email_replies`** — matched reply messages. Fields: sent_email_id, received_at, snippet, classification (interested | not_interested | ooo | unsubscribe | question), raw_message_id (unique)
+- **`email_unsubs`** — global opt-out list. Fields: contact_email (unique), unsubscribed_at, reason
 - **`jobs`** — the simple queue. Fields: batch_id, prospect_id, job_type, status (pending | running | done | failed), attempts, last_error, created_at, processed_at
 
 Phase 4A added:

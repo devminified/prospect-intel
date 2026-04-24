@@ -7,6 +7,8 @@ interface CreateBatchRequest {
   city: string
   category: string
   count: number
+  auto_enrich_top_n?: number
+  pitch_score_threshold?: number | null
 }
 
 export async function POST(request: NextRequest) {
@@ -25,6 +27,11 @@ export async function POST(request: NextRequest) {
 
     const body: CreateBatchRequest = await request.json()
     const { city, category, count } = body
+    const autoEnrichTopN = Math.max(0, Math.min(50, Number(body.auto_enrich_top_n ?? 0)))
+    const pitchScoreThreshold =
+      body.pitch_score_threshold == null
+        ? null
+        : Math.max(0, Math.min(100, Number(body.pitch_score_threshold)))
 
     if (!city || !category || !count || count <= 0 || count > 50) {
       return NextResponse.json(
@@ -41,6 +48,8 @@ export async function POST(request: NextRequest) {
         category,
         count_requested: count,
         status: 'processing',
+        auto_enrich_top_n: autoEnrichTopN,
+        pitch_score_threshold: pitchScoreThreshold,
       })
       .select()
       .single()

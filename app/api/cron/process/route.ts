@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { enrichProspect } from '@/lib/enrich'
 import { analyzeProspect } from '@/lib/analyze'
-import { findContacts } from '@/lib/contacts'
+import { discoverPeople } from '@/lib/contacts'
 import { auditVisibility } from '@/lib/audit'
 import { generatePitch } from '@/lib/pitch'
 
@@ -11,7 +11,7 @@ export const maxDuration = 60
 const JOBS_PER_RUN = 10
 const MAX_ATTEMPTS = 3
 
-type JobType = 'enrich' | 'analyze' | 'find_contacts' | 'audit_visibility' | 'pitch'
+type JobType = 'enrich' | 'analyze' | 'audit_visibility' | 'pitch' | 'discover_contacts'
 type JobStatus = 'pending' | 'running' | 'done' | 'failed'
 
 interface Job {
@@ -108,22 +108,25 @@ async function dispatch(job: Job): Promise<void> {
       return enrichProspect(job.prospect_id)
     case 'analyze':
       return analyzeProspect(job.prospect_id)
-    case 'find_contacts':
-      return findContacts(job.prospect_id)
     case 'audit_visibility':
       return auditVisibility(job.prospect_id)
     case 'pitch':
       return generatePitch(job.prospect_id)
+    case 'discover_contacts':
+      return discoverPeople(job.prospect_id)
     default:
       throw new Error(`unknown job_type: ${job.job_type}`)
   }
 }
 
 async function enqueueNext(job: Job): Promise<void> {
+  // Phase 3 auto-chain: enrich → analyze → audit_visibility → pitch.
+  // discover_contacts is opt-in via batches.auto_enrich_top_n (see settleBatch)
+  // or by explicit user action (POST /api/prospects/[id]/discover-contacts).
+  // It never auto-chains from the main pipeline.
   const next: JobType | null =
     job.job_type === 'enrich' ? 'analyze'
-    : job.job_type === 'analyze' ? 'find_contacts'
-    : job.job_type === 'find_contacts' ? 'audit_visibility'
+    : job.job_type === 'analyze' ? 'audit_visibility'
     : job.job_type === 'audit_visibility' ? 'pitch'
     : null
 
@@ -166,13 +169,31 @@ async function markJobFailed(jobId: string, attempts: number, message: string): 
 async function settleBatch(batchId: string): Promise<void> {
   const { data: jobs, error: jobsError } = await supabaseAdmin
     .from('jobs')
-    .select('status')
+    .select('job_type, status')
     .eq('batch_id', batchId)
 
   if (jobsError || !jobs) return
 
   const anyUnfinished = jobs.some((j: { status: string }) => j.status === 'pending' || j.status === 'running')
   if (anyUnfinished) return
+
+  // Main pipeline is terminal. Before marking batch done, check if auto-enrich
+  // top-N is configured and hasn't been triggered yet. If so, find the top N
+  // prospects by analysis.opportunity_score and enqueue discover_contacts
+  // jobs for them. The batch stays in 'processing' until those finish too.
+  const { data: batch } = await supabaseAdmin
+    .from('batches')
+    .select('auto_enrich_top_n')
+    .eq('id', batchId)
+    .single()
+
+  const topN = (batch as any)?.auto_enrich_top_n ?? 0
+  const alreadyEnqueued = jobs.some((j: { job_type: string }) => j.job_type === 'discover_contacts')
+
+  if (topN > 0 && !alreadyEnqueued) {
+    await enqueueAutoDiscover(batchId, topN)
+    return // don't mark done — discover jobs are now pending
+  }
 
   const { count: readyCount } = await supabaseAdmin
     .from('prospects')
@@ -184,4 +205,35 @@ async function settleBatch(batchId: string): Promise<void> {
     .from('batches')
     .update({ status: 'done', count_completed: readyCount ?? 0 })
     .eq('id', batchId)
+}
+
+async function enqueueAutoDiscover(batchId: string, topN: number): Promise<void> {
+  // Rank prospects in this batch by opportunity_score desc, take top N,
+  // enqueue one discover_contacts job per prospect.
+  const { data: scored, error } = await supabaseAdmin
+    .from('prospects')
+    .select('id, analyses(opportunity_score)')
+    .eq('batch_id', batchId)
+  if (error || !scored) {
+    console.error('auto-enrich: prospect lookup failed:', error?.message)
+    return
+  }
+
+  const ranked = (scored as any[])
+    .map((p) => ({ id: p.id as string, score: p.analyses?.opportunity_score ?? -1 }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topN)
+
+  if (ranked.length === 0) return
+
+  const rows = ranked.map((p) => ({
+    batch_id: batchId,
+    prospect_id: p.id,
+    job_type: 'discover_contacts' as const,
+    status: 'pending' as const,
+    attempts: 0,
+  }))
+
+  const { error: insertErr } = await supabaseAdmin.from('jobs').insert(rows)
+  if (insertErr) console.error('auto-enrich: enqueue failed:', insertErr.message)
 }

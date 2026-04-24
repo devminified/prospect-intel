@@ -75,7 +75,17 @@ interface ContactInsert {
   is_primary: boolean
 }
 
-export async function findContacts(prospectId: string): Promise<void> {
+/**
+ * Discover executives at the prospect's company via Apollo's people search.
+ * This is a LIST operation — counts against the people-search quota but does
+ * NOT spend email credits. Emails come back only when Apollo already has
+ * them cached from prior reveals; for others `email` is null.
+ *
+ * Picks the single most pitch-worthy contact as is_primary via the pitch
+ * priority ranking. Does not reveal the primary's email — that's a separate
+ * explicit action via revealEmail() so we never spend credits implicitly.
+ */
+export async function discoverPeople(prospectId: string): Promise<void> {
   const { data: prospect, error: pErr } = await supabaseAdmin
     .from('prospects')
     .select('id, website, name')
@@ -88,8 +98,8 @@ export async function findContacts(prospectId: string): Promise<void> {
 
   const domain = extractDomain(prospect.website)
   if (!domain) {
-    // Nothing to search against. Leave a single placeholder row so pitch step
-    // doesn't block waiting for contacts and the UI shows the reason.
+    // No domain to search. Drop a placeholder so the UI can show "Apollo had
+    // nothing to work with" rather than appearing to not have tried.
     await supabaseAdmin.from('contacts').insert({
       prospect_id: prospectId,
       full_name: null,
@@ -126,29 +136,53 @@ export async function findContacts(prospectId: string): Promise<void> {
   rows.sort((a, b) => pitchPriority(a.title) - pitchPriority(b.title))
   if (rows.length > 0) rows[0].is_primary = true
 
-  const { data: inserted, error: insertErr } = await supabaseAdmin
-    .from('contacts')
-    .insert(rows)
-    .select('id, is_primary, apollo_person_id, email')
-
+  const { error: insertErr } = await supabaseAdmin.from('contacts').insert(rows)
   if (insertErr) {
     throw new Error(`Failed to save contacts: ${insertErr.message}`)
   }
+}
 
-  const primary = (inserted ?? []).find((c: any) => c.is_primary)
-  if (primary && primary.apollo_person_id && !primary.email) {
-    const revealed = await apolloPeopleMatch(primary.apollo_person_id)
-    if (revealed?.email) {
-      await supabaseAdmin
-        .from('contacts')
-        .update({
-          email: revealed.email,
-          email_confidence: mapConfidence(revealed.email_status),
-          phone: revealed.phone ?? null,
-        })
-        .eq('id', primary.id)
-    }
+/**
+ * Spend one Apollo email credit to reveal the verified email for a single
+ * already-discovered contact. Updates the row in place with email, phone,
+ * and a timestamp so we have an audit trail of when credits were consumed.
+ */
+export async function revealEmail(contactId: string): Promise<{ email: string | null; phone: string | null }> {
+  const { data: contact, error: cErr } = await supabaseAdmin
+    .from('contacts')
+    .select('id, apollo_person_id, email, email_revealed_at')
+    .eq('id', contactId)
+    .single()
+
+  if (cErr || !contact) {
+    throw new Error(`Contact not found: ${contactId}`)
   }
+  if (!contact.apollo_person_id) {
+    throw new Error('Contact has no Apollo person id — cannot reveal email')
+  }
+  if (contact.email && contact.email_revealed_at) {
+    return { email: contact.email, phone: null }
+  }
+
+  const result = await apolloPeopleMatch(contact.apollo_person_id)
+  if (!result) {
+    throw new Error('Apollo returned no match for this contact')
+  }
+
+  const { error: updateErr } = await supabaseAdmin
+    .from('contacts')
+    .update({
+      email: result.email,
+      email_confidence: result.email ? mapConfidence(result.email_status) : null,
+      phone: result.phone ?? null,
+      email_revealed_at: new Date().toISOString(),
+    })
+    .eq('id', contactId)
+  if (updateErr) {
+    throw new Error(`Failed to persist revealed email: ${updateErr.message}`)
+  }
+
+  return { email: result.email ?? null, phone: result.phone ?? null }
 }
 
 async function apolloPeopleSearch(domain: string): Promise<ApolloPerson[]> {
@@ -201,8 +235,7 @@ async function apolloPeopleMatch(personId: string): Promise<ApolloMatchResult | 
 
   if (!res.ok) {
     const body = await res.text().catch(() => '')
-    console.warn(`[Apollo] match for ${personId} failed: ${extractSnippet(body)} (HTTP ${res.status})`)
-    return null
+    throw new ExternalAPIError(PROVIDER, `peopleMatch failed: ${extractSnippet(body)}`, res.status)
   }
   const data = await res.json()
   const person = data?.person

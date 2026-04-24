@@ -2,7 +2,6 @@ import { ExternalAPIError } from '../errors'
 
 const PROVIDER = 'Zoho'
 const ACCOUNTS_BASE = process.env.ZOHO_ACCOUNTS_BASE ?? 'https://accounts.zoho.com'
-const DEFAULT_API_DOMAIN = 'https://mail.zoho.com'
 
 const SCOPES = [
   'ZohoMail.messages.CREATE',
@@ -15,6 +14,22 @@ function requireEnv(name: string): string {
   if (!v) throw new ExternalAPIError(PROVIDER, `Missing env.${name}`, 500)
   return v
 }
+
+/**
+ * Derive the Mail API base from the Accounts base. They're both region-specific:
+ *   accounts.zoho.com → mail.zoho.com
+ *   accounts.zoho.eu  → mail.zoho.eu
+ *   accounts.zoho.in  → mail.zoho.in
+ *
+ * DO NOT use the `api_domain` Zoho returns from the OAuth token response —
+ * that field points at the generic Zoho API gateway (www.zohoapis.com) which
+ * does NOT serve the Mail API. Mail API lives on its own subdomain.
+ */
+function mailApiBase(accountsBase: string = ACCOUNTS_BASE): string {
+  return accountsBase.replace('://accounts.', '://mail.')
+}
+
+const DEFAULT_API_DOMAIN = mailApiBase()
 
 export function getAuthUrl(state: string): string {
   const clientId = requireEnv('ZOHO_CLIENT_ID')
@@ -62,7 +77,8 @@ export async function exchangeCode(code: string): Promise<ZohoTokenResponse> {
   if (!res.ok || !data?.access_token) {
     throw new ExternalAPIError(PROVIDER, `token exchange failed: ${JSON.stringify(data ?? {})}`, res.status)
   }
-  return data as ZohoTokenResponse
+  // Override api_domain — OAuth returns the generic gateway, Mail API is on its own subdomain.
+  return { ...data, api_domain: mailApiBase() } as ZohoTokenResponse
 }
 
 export async function refreshAccessToken(refreshToken: string): Promise<ZohoTokenResponse> {
@@ -86,7 +102,7 @@ export async function refreshAccessToken(refreshToken: string): Promise<ZohoToke
   if (!res.ok || !data?.access_token) {
     throw new ExternalAPIError(PROVIDER, `token refresh failed: ${JSON.stringify(data ?? {})}`, res.status)
   }
-  return data as ZohoTokenResponse
+  return { ...data, api_domain: mailApiBase() } as ZohoTokenResponse
 }
 
 export interface ZohoAccountInfo {
@@ -101,9 +117,15 @@ export async function getAccountInfo(accessToken: string, apiDomain: string): Pr
     headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
     signal: AbortSignal.timeout(15_000),
   })
-  const data = await res.json().catch(() => null)
+  const raw = await res.text()
+  const data = raw ? safeJson(raw) : null
   if (!res.ok) {
-    throw new ExternalAPIError(PROVIDER, `accounts lookup failed: ${JSON.stringify(data ?? {})}`, res.status)
+    const detail = data ? JSON.stringify(data) : raw.slice(0, 300) || '(empty body)'
+    throw new ExternalAPIError(
+      PROVIDER,
+      `accounts lookup failed @ ${base}/api/accounts — ${detail}`,
+      res.status
+    )
   }
   const first = data?.data?.[0]
   if (!first?.accountId) {
@@ -114,6 +136,10 @@ export async function getAccountInfo(accessToken: string, apiDomain: string): Pr
     primaryEmailAddress: String(first.primaryEmailAddress ?? ''),
     displayName: first.displayName ?? null,
   }
+}
+
+function safeJson(s: string): any {
+  try { return JSON.parse(s) } catch { return null }
 }
 
 export interface SendMessageInput {

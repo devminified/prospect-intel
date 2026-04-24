@@ -1,5 +1,7 @@
 import * as cheerio from 'cheerio'
 import { supabaseAdmin } from '@/lib/supabase/server'
+import { renderPage, extractTypedFields, type ScrapedStructuredData } from '@/lib/scrape/scrapingbee'
+import { detectBookingPlatform, hasBookingCTA } from '@/lib/booking-platforms'
 
 interface TechStack {
   has_website: boolean
@@ -22,41 +24,12 @@ interface EnrichmentRow {
   homepage_text_excerpt: string | null
   fetch_error: string | null
   fetched_at: string
+  scraped_data_json: ScrapedStructuredData | null
 }
 
 const FETCH_TIMEOUT_MS = 8000
 const HOMEPAGE_EXCERPT_CHARS = 3000
-const SCRAPINGBEE_TIMEOUT_MS = 30000
 const THIN_TEXT_THRESHOLD = 500
-
-async function fetchRendered(url: string): Promise<string | null> {
-  const apiKey = process.env.SCRAPINGBEE_API_KEY
-  if (!apiKey) return null
-  const sb = new URL('https://app.scrapingbee.com/api/v1/')
-  sb.searchParams.set('api_key', apiKey)
-  sb.searchParams.set('url', url)
-  sb.searchParams.set('render_js', 'true')
-  sb.searchParams.set('block_resources', 'false')
-  try {
-    const res = await fetch(sb.toString(), {
-      signal: AbortSignal.timeout(SCRAPINGBEE_TIMEOUT_MS),
-    })
-    if (!res.ok) {
-      console.warn(`[ScrapingBee] ${res.status} for ${url}`)
-      return null
-    }
-    return await res.text()
-  } catch (err: any) {
-    console.warn(`[ScrapingBee] ${err?.message ?? err} for ${url}`)
-    return null
-  }
-}
-
-function extractText(html: string): string {
-  const $ = cheerio.load(html)
-  $('script, style, noscript').remove()
-  return $('body').text().replace(/\s+/g, ' ').trim()
-}
 
 export async function enrichProspect(prospectId: string): Promise<void> {
   const { data: prospect, error: prospectError } = await supabaseAdmin
@@ -84,6 +57,7 @@ export async function enrichProspect(prospectId: string): Promise<void> {
       homepage_text_excerpt: null,
       fetch_error: 'No website URL',
       fetched_at: now,
+      scraped_data_json: null,
     })
     await markProspectEnriched(prospectId, prospect.batch_id)
     return
@@ -118,6 +92,7 @@ export async function enrichProspect(prospectId: string): Promise<void> {
       fetchError = httpsResult.error ?? httpResult.error ?? 'fetch failed'
     }
   }
+
   const techStack: TechStack = {
     has_website: true,
     website_status: status,
@@ -130,13 +105,14 @@ export async function enrichProspect(prospectId: string): Promise<void> {
   let homepageText: string | null = null
   let hasContactForm = false
   let isMobileFriendly = false
+  let bookingCtaDetected = false
 
   if (html) {
     let bodyText = extractText(html)
 
-    if (bodyText.length < THIN_TEXT_THRESHOLD && (finalUrl || httpsUrl)) {
-      const renderUrl = finalUrl ?? httpsUrl
-      const rendered = await fetchRendered(renderUrl)
+    // ScrapingBee render fallback for JS-rendered sites returning thin HTML
+    if (bodyText.length < THIN_TEXT_THRESHOLD && finalUrl) {
+      const rendered = await renderPage(finalUrl)
       if (rendered) {
         const renderedText = extractText(rendered)
         if (renderedText.length > bodyText.length) {
@@ -149,9 +125,7 @@ export async function enrichProspect(prospectId: string): Promise<void> {
     homepageText = bodyText.slice(0, HOMEPAGE_EXCERPT_CHARS)
 
     const $ = cheerio.load(html)
-
     isMobileFriendly = $('meta[name="viewport"]').length > 0
-
     hasContactForm = $('form').filter((_i: number, el: any) => {
       const formHtml = $(el).html() || ''
       return /email|contact|message/i.test(formHtml)
@@ -171,19 +145,9 @@ export async function enrichProspect(prospectId: string): Promise<void> {
       techStack.cms = 'Webflow'
     }
 
-    if (lower.includes('calendly.com')) {
-      techStack.booking = 'Calendly'
-    } else if (lower.includes('acuityscheduling.com')) {
-      techStack.booking = 'Acuity'
-    } else if (lower.includes('opentable.com')) {
-      techStack.booking = 'OpenTable'
-    } else if (lower.includes('resy.com')) {
-      techStack.booking = 'Resy'
-    } else if (lower.includes('square.site/book') || lower.includes('squareappointments')) {
-      techStack.booking = 'Square Appointments'
-    } else if (lower.includes('yelp.com/reservations')) {
-      techStack.booking = 'Yelp Reservations'
-    }
+    // Phase 3: expanded booking detection via dedicated module
+    techStack.booking = detectBookingPlatform(html)
+    bookingCtaDetected = hasBookingCTA(html)
 
     if (lower.includes('cdn.shopify.com') || lower.includes('myshopify.com')) {
       techStack.ecommerce = 'Shopify'
@@ -212,10 +176,30 @@ export async function enrichProspect(prospectId: string): Promise<void> {
     }
   }
 
+  // AI Extract — runs per-prospect with a URL, even when our direct fetch
+  // failed. ScrapingBee has their own proxies that often succeed where we
+  // can't. Returns null on any failure, which we accept gracefully.
+  const scraped = finalUrl || fetchError
+    ? await extractTypedFields(finalUrl ?? httpsUrl)
+    : null
+
+  // Merge AI Extract signal back into has_online_booking decision:
+  //   - HTML regex detected a specific platform → booking=true
+  //   - generic Book Now CTA present → booking=true
+  //   - AI Extract found a booking_platform or book_url → booking=true
+  const aiBookingSignal = !!(scraped?.booking_platform || scraped?.book_url)
+  const hasOnlineBooking = !!techStack.booking || bookingCtaDetected || aiBookingSignal
+
+  // If tech_stack.booking is still null but other signals say yes, backfill
+  // with whatever label we can justify. Prefer AI's answer over generic flag.
+  if (!techStack.booking && hasOnlineBooking) {
+    techStack.booking = scraped?.booking_platform ?? 'unknown'
+  }
+
   await writeEnrichment({
     prospect_id: prospectId,
     tech_stack_json: techStack,
-    has_online_booking: !!techStack.booking,
+    has_online_booking: hasOnlineBooking,
     has_ecommerce: !!techStack.ecommerce,
     has_chat: !!techStack.chat,
     has_contact_form: hasContactForm,
@@ -224,6 +208,7 @@ export async function enrichProspect(prospectId: string): Promise<void> {
     homepage_text_excerpt: homepageText,
     fetch_error: fetchError,
     fetched_at: now,
+    scraped_data_json: scraped,
   })
 
   await markProspectEnriched(prospectId, prospect.batch_id)
@@ -252,6 +237,12 @@ async function tryFetch(url: string): Promise<FetchOutcome> {
     const msg = err?.name === 'TimeoutError' ? 'timeout' : (err?.message ?? 'fetch failed')
     return { ok: false, html: null, status: null, error: msg }
   }
+}
+
+function extractText(html: string): string {
+  const $ = cheerio.load(html)
+  $('script, style, noscript').remove()
+  return $('body').text().replace(/\s+/g, ' ').trim()
 }
 
 async function writeEnrichment(row: EnrichmentRow): Promise<void> {

@@ -15,6 +15,19 @@ interface Plan {
   executed_at: string | null
 }
 
+interface PerformanceRow {
+  category: string
+  city: string
+  sent: number
+  replies: number
+  interested: number
+  not_interested: number
+  unsub: number
+  reply_rate: number
+  interested_rate: number
+  unsub_rate: number
+}
+
 const STATUS_VARIANT: Record<string, 'default' | 'secondary' | 'outline'> = {
   executed: 'default',
   skipped: 'outline',
@@ -23,6 +36,7 @@ const STATUS_VARIANT: Record<string, 'default' | 'secondary' | 'outline'> = {
 
 export default function PlansPage() {
   const [plans, setPlans] = useState<Plan[]>([])
+  const [performance, setPerformance] = useState<PerformanceRow[]>([])
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
@@ -33,15 +47,28 @@ export default function PlansPage() {
 
   async function load() {
     setLoading(true)
-    const { data, error } = await supabase
-      .from('lead_plans')
-      .select('id, plan_date, status, created_at, executed_at')
-      .order('created_at', { ascending: false })
+    const [{ data, error }, perfRes] = await Promise.all([
+      supabase
+        .from('lead_plans')
+        .select('id, plan_date, status, created_at, executed_at')
+        .order('created_at', { ascending: false }),
+      (async () => {
+        const { data: sessionData } = await supabase.auth.getSession()
+        const token = sessionData.session?.access_token
+        if (!token) return null
+        const res = await fetch('/api/performance?days=30', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!res.ok) return null
+        return res.json()
+      })(),
+    ])
     if (error) {
       setError(error.message)
     } else {
       setPlans((data as Plan[]) ?? [])
     }
+    if (perfRes?.rows) setPerformance(perfRes.rows as PerformanceRow[])
     setLoading(false)
   }
 
@@ -85,6 +112,69 @@ export default function PlansPage() {
 
       {error && (
         <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-sm">{error}</div>
+      )}
+
+      {performance.length > 0 && (
+        <Card>
+          <CardHeader className="flex-row items-baseline justify-between">
+            <CardTitle className="text-base">Recent outreach performance</CardTitle>
+            <span className="text-xs text-muted-foreground font-normal">last 30 days · planner uses this</span>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs font-semibold uppercase text-muted-foreground border-b">
+                    <th className="p-3">Category</th>
+                    <th className="p-3">City</th>
+                    <th className="p-3 text-right">Sent</th>
+                    <th className="p-3 text-right">Replies</th>
+                    <th className="p-3 text-right">Interested</th>
+                    <th className="p-3 text-right">Unsub</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {performance.map((p) => {
+                    const pct = (n: number) => `${Math.round(n * 100)}%`
+                    const strong = p.sent >= 5 && p.interested_rate >= 0.1
+                    const bad = p.sent >= 5 && p.unsub_rate >= 0.2
+                    const rowCls = strong
+                      ? 'bg-green-50/50'
+                      : bad
+                      ? 'bg-red-50/50'
+                      : ''
+                    return (
+                      <tr key={`${p.category}|${p.city}`} className={rowCls}>
+                        <td className="p-3 font-medium capitalize">{p.category}</td>
+                        <td className="p-3 text-muted-foreground">{p.city}</td>
+                        <td className="p-3 text-right tabular-nums">{p.sent}</td>
+                        <td className="p-3 text-right tabular-nums">
+                          {p.replies}
+                          <span className="ml-1 text-xs text-muted-foreground">({pct(p.reply_rate)})</span>
+                        </td>
+                        <td className="p-3 text-right tabular-nums">
+                          <span className={strong ? 'text-green-700 font-semibold' : ''}>
+                            {p.interested}
+                            <span className="ml-1 text-xs font-normal text-muted-foreground">({pct(p.interested_rate)})</span>
+                          </span>
+                        </td>
+                        <td className="p-3 text-right tabular-nums">
+                          <span className={bad ? 'text-destructive font-semibold' : ''}>
+                            {p.unsub}
+                            <span className="ml-1 text-xs font-normal text-muted-foreground">({pct(p.unsub_rate)})</span>
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="p-3 border-t text-xs text-muted-foreground">
+              Rows highlighted green = ≥10% interested on ≥5 sent (planner ranks up). Red = ≥20% unsub (planner drops).
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       <Card>

@@ -52,6 +52,102 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 // Anthropic + etc). Used only for the est cost column on plan items.
 const COST_PER_PROSPECT_USD = 0.4
 
+// M25: how far back to aggregate reply performance for the planner's feedback loop
+const PERFORMANCE_LOOKBACK_DAYS = 30
+
+export interface PerformanceRow {
+  category: string
+  city: string
+  sent: number
+  replies: number
+  interested: number
+  not_interested: number
+  unsub: number
+  reply_rate: number      // 0-1
+  interested_rate: number // 0-1
+  unsub_rate: number      // 0-1
+}
+
+/**
+ * Aggregate per (category, city) performance for outreach in the last N days.
+ * Source: sent_emails -> pitches -> prospects -> batches (category, city)
+ *         joined with email_replies.classification.
+ *
+ * Cold-start: returns empty array if user has never sent or has no replies yet.
+ */
+export async function computeRecentPerformance(
+  userId: string,
+  daysBack: number = PERFORMANCE_LOOKBACK_DAYS
+): Promise<PerformanceRow[]> {
+  const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString()
+
+  // Pull sent emails the user owns in the window, with pitch/prospect/batch ctx
+  // and any classified replies attached.
+  const { data: rows, error } = await supabaseAdmin
+    .from('sent_emails')
+    .select(`
+      id,
+      sent_at,
+      email_accounts!inner(user_id),
+      pitches!inner(
+        prospect_id,
+        prospects!inner(
+          batch_id,
+          batches!inner(city, category)
+        )
+      ),
+      email_replies(classification)
+    `)
+    .gte('sent_at', since)
+    .eq('email_accounts.user_id', userId)
+
+  if (error) throw new Error(`Performance aggregate failed: ${error.message}`)
+
+  const bucket = new Map<string, PerformanceRow>()
+  for (const row of (rows ?? []) as any[]) {
+    const batch = row.pitches?.prospects?.batches
+    if (!batch?.category || !batch?.city) continue
+    const category = String(batch.category).toLowerCase().trim()
+    const city = String(batch.city).trim()
+    const key = `${category}|${city}`
+
+    const existing = bucket.get(key) ?? {
+      category,
+      city,
+      sent: 0,
+      replies: 0,
+      interested: 0,
+      not_interested: 0,
+      unsub: 0,
+      reply_rate: 0,
+      interested_rate: 0,
+      unsub_rate: 0,
+    }
+    existing.sent += 1
+    const replies = Array.isArray(row.email_replies) ? row.email_replies : []
+    if (replies.length > 0) {
+      existing.replies += 1
+      // Use the latest classification on this sent email
+      const latest = replies[replies.length - 1]?.classification
+      if (latest === 'interested') existing.interested += 1
+      else if (latest === 'not_interested') existing.not_interested += 1
+      else if (latest === 'unsubscribe') existing.unsub += 1
+    }
+    bucket.set(key, existing)
+  }
+
+  const out: PerformanceRow[] = []
+  for (const row of bucket.values()) {
+    row.reply_rate = row.sent > 0 ? row.replies / row.sent : 0
+    row.interested_rate = row.sent > 0 ? row.interested / row.sent : 0
+    row.unsub_rate = row.sent > 0 ? row.unsub / row.sent : 0
+    out.push(row)
+  }
+  // Sort by interested rate desc, then reply rate desc — the signals planner cares about most
+  out.sort((a, b) => b.interested_rate - a.interested_rate || b.reply_rate - a.reply_rate)
+  return out
+}
+
 /**
  * Generate today's daily lead plan for a user. Loads their ICP, computes the
  * seasonality cut for their target_categories, summarizes recent batches, then
@@ -85,6 +181,9 @@ export async function generatePlan(userId: string): Promise<string> {
     .order('created_at', { ascending: false })
     .limit(20)
 
+  // M25: pull reply-rate feedback from the last 30 days of outreach outcomes
+  const performance = await computeRecentPerformance(userId, PERFORMANCE_LOOKBACK_DAYS).catch(() => [])
+
   const prompt = plannerPrompt({
     today_iso: today,
     today_month_name: monthName,
@@ -105,6 +204,8 @@ export async function generatePlan(userId: string): Promise<string> {
       prospects_created: b.count_requested,
       created_at: b.created_at,
     })),
+    performance,
+    performance_window_days: PERFORMANCE_LOOKBACK_DAYS,
   })
 
   const result = await callOpus(prompt)

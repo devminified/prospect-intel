@@ -94,6 +94,69 @@ RULES
 Return ONLY valid JSON matching the required schema.`
 }
 
+export interface PlannerPromptInput {
+  today_iso: string                // e.g. "2026-04-24"
+  today_month_name: string         // "April"
+  icp: {
+    services: string[]
+    avg_deal_size: number | null
+    daily_capacity: number
+    preferred_cities: string[]
+    excluded_cities: string[]
+    min_gmb_rating: number | null
+    min_review_count: number | null
+    target_categories: string[]
+  }
+  seasonality: Array<{
+    category: string
+    peak_months: number[]
+    reason: string
+    in_peak: boolean
+  }>
+  recent_batches: Array<{ city: string; category: string; prospects_created: number; created_at: string }>
+}
+
+export function plannerPrompt(i: PlannerPromptInput): string {
+  const icp = i.icp
+  const cap = icp.daily_capacity > 0 ? String(icp.daily_capacity) : 'unlimited'
+  const preferred = icp.preferred_cities.length ? icp.preferred_cities.join(', ') : '(none specified — pick from real US metros)'
+  const excluded = icp.excluded_cities.length ? icp.excluded_cities.join(', ') : 'none'
+  const dealSize = icp.avg_deal_size != null ? `$${icp.avg_deal_size}` : 'unspecified'
+
+  return `You are the lead-planning advisor for a dev + AI automation agency.
+Today is ${i.today_iso} (${i.today_month_name}). Produce 3-5 prospect-discovery
+batches to run TODAY, ranked by what has the best chance of converting given
+the agency's ICP and category seasonality.
+
+AGENCY ICP
+- Services offered: ${icp.services.join(', ') || 'unspecified'}
+- Average deal size: ${dealSize}
+- Daily lead capacity (HARD CAP — total counts across items must be ≤ this): ${cap}
+- Preferred cities: ${preferred}
+- Excluded cities: ${excluded}
+- Minimum GMB rating prospects must have: ${icp.min_gmb_rating ?? 'unspecified'}
+- Minimum review count: ${icp.min_review_count ?? 'unspecified'}
+- Target categories pool: ${icp.target_categories.join(', ') || 'unspecified'}
+
+SEASONALITY FOR THIS MONTH
+${i.seasonality.map((s) => `- ${s.category} [${s.in_peak ? 'IN PEAK' : 'off peak'}]: ${s.reason}`).join('\n') || '(no seasonality data for target categories)'}
+
+RECENT BATCHES RUN (last 30 days, for avoiding immediate duplicates)
+${i.recent_batches.length ? i.recent_batches.map((b) => `- ${b.category} in ${b.city} (${b.prospects_created} prospects, ${b.created_at.slice(0, 10)})`).join('\n') : '(no recent batches)'}
+
+RULES
+- Pick categories ONLY from the target_categories pool. Do not invent new ones.
+- Pick cities ONLY from preferred_cities, or omit if none were provided (then use defensible US metros that fit the category).
+- NEVER pick a city listed in excluded_cities.
+- Prefer categories that are IN PEAK this month over off-peak ones. If a peak-category isn't in target_categories, skip it.
+- Spread counts across 3-5 items when daily_capacity allows. Single-item plans only when capacity is small.
+- Total of all item counts MUST be ≤ daily_capacity when daily_capacity > 0.
+- Avoid re-running the exact same (category, city) combination within 30 days unless seasonality strongly justifies it.
+- Each item needs a concrete reasoning string (1-2 sentences) that cites seasonality AND agency fit. Do not write generic "is a good category" reasoning.
+
+Return ONLY valid JSON matching the required schema. No preamble, no markdown.`
+}
+
 export interface AnalysisPromptInput {
   name: string
   category: string

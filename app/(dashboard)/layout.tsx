@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 
@@ -61,10 +62,13 @@ export default function DashboardLayout({
       <nav className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
-            <div className="flex items-center">
-              <h1 className="text-xl font-semibold text-gray-900">
-                Prospect Intel
-              </h1>
+            <div className="flex items-center gap-6">
+              <h1 className="text-xl font-semibold text-gray-900">Prospect Intel</h1>
+              <nav className="hidden md:flex gap-4 text-sm">
+                <Link href="/plans" className="text-gray-700 hover:text-indigo-600">Plans</Link>
+                <Link href="/batches" className="text-gray-700 hover:text-indigo-600">Batches</Link>
+                <Link href="/settings/icp" className="text-gray-700 hover:text-indigo-600">ICP</Link>
+              </nav>
             </div>
             <div className="flex items-center space-x-4">
               <span className="text-sm text-gray-700">{user.email}</span>

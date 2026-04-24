@@ -12,6 +12,7 @@ const NAV = [
   { href: '/plans', label: 'Plans' },
   { href: '/batches', label: 'Batches' },
   { href: '/settings/icp', label: 'ICP' },
+  { href: '/settings/email', label: 'Email' },
 ]
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

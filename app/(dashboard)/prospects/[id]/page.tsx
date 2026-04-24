@@ -62,6 +62,16 @@ interface Recommendation {
   generated_at: string | null
 }
 
+interface SentEmail {
+  id: string
+  to_email: string
+  sent_at: string
+  bounced: boolean
+  bounce_reason: string | null
+  email_opens: Array<{ opened_at: string; is_probably_mpp: boolean }>
+  email_replies: Array<{ received_at: string | null; classification: string | null }>
+}
+
 interface Detail {
   prospect: {
     id: string
@@ -100,6 +110,7 @@ interface Detail {
   contacts: Contact[]
   audit: Audit | null
   recommendation: Recommendation | null
+  sentEmail: SentEmail | null
 }
 
 const PROSPECT_STATUSES = ['new', 'enriched', 'analyzed', 'ready', 'contacted', 'replied', 'rejected']
@@ -124,6 +135,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   const [regenerating, setRegenerating] = useState(false)
   const [recommending, setRecommending] = useState(false)
   const [scriptCopiedAt, setScriptCopiedAt] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
 
   useEffect(() => {
     load()
@@ -137,11 +149,25 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       supabase.from('prospects').select('*').eq('id', id).single(),
       supabase.from('enrichments').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('analyses').select('*').eq('prospect_id', id).maybeSingle(),
-      supabase.from('pitches').select('subject, body, edited_body, status').eq('prospect_id', id).maybeSingle(),
+      supabase.from('pitches').select('id, subject, body, edited_body, status').eq('prospect_id', id).maybeSingle(),
       supabase.from('contacts').select('id, full_name, title, seniority, department, email, email_confidence, linkedin_url, is_primary').eq('prospect_id', id),
       supabase.from('visibility_audits').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('channel_recommendations').select('phone_fit_score, email_fit_score, recommended_channel, reasoning, phone_script, generated_at').eq('prospect_id', id).maybeSingle(),
     ])
+
+    // Sent emails are loaded separately — keyed by pitch_id since pitch.id is required
+    let sentEmail: SentEmail | null = null
+    const pitchId = (pitchRes.data as any)?.id
+    if (pitchId) {
+      const { data: sent } = await supabase
+        .from('sent_emails')
+        .select('id, to_email, sent_at, bounced, bounce_reason, email_opens(opened_at, is_probably_mpp), email_replies(received_at, classification)')
+        .eq('pitch_id', pitchId)
+        .order('sent_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      sentEmail = (sent as unknown as SentEmail) ?? null
+    }
 
     if (pRes.error) {
       setError(`Prospect load failed: ${pRes.error.message}`)
@@ -157,6 +183,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       contacts: (cRes.data as Contact[]) ?? [],
       audit: (vRes.data as Audit) ?? null,
       recommendation: (rRes.data as Recommendation) ?? null,
+      sentEmail,
     }
     setDetail(d)
     setEditedBody(d.pitch?.edited_body ?? d.pitch?.body ?? '')
@@ -297,6 +324,27 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
     }
   }
 
+  async function sendViaZoho() {
+    setSending(true)
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/pitches/${detail?.pitch ? (detail.pitch as any).id ?? '' : ''}/send`, {
+        method: 'POST',
+        headers,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'send failed' }))
+        throw new Error(err.error ?? 'send failed')
+      }
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setSending(false)
+    }
+  }
+
   function copyScript() {
     const text = detail?.recommendation?.phone_script ?? ''
     if (!text) return
@@ -309,7 +357,11 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   if (error && !detail) return <div className="text-destructive">{error}</div>
   if (!detail) return <div className="text-muted-foreground">Not found.</div>
 
-  const { prospect, enrichment, analysis, pitch, contacts, audit, recommendation } = detail
+  const { prospect, enrichment, analysis, pitch, contacts, audit, recommendation, sentEmail } = detail
+  const primaryContactEmail = contacts.find((c) => c.is_primary && c.email)?.email ?? contacts.find((c) => c.email)?.email ?? null
+  const realOpens = (sentEmail?.email_opens ?? []).filter((o) => !o.is_probably_mpp).length
+  const mppOpens = (sentEmail?.email_opens ?? []).filter((o) => o.is_probably_mpp).length
+  const replyCount = sentEmail?.email_replies?.length ?? 0
   const sortedContacts = [...contacts].sort((a, b) => {
     if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1
     return seniorityRank(a.seniority) - seniorityRank(b.seniority)
@@ -511,7 +563,54 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                   >
                     {pitch.status === 'approved' ? 'Approved ✓' : 'Approve'}
                   </Button>
+                  <Button
+                    size="sm"
+                    onClick={sendViaZoho}
+                    disabled={sending || !primaryContactEmail || !!sentEmail}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                    title={
+                      !primaryContactEmail
+                        ? 'No revealed contact email — reveal one first'
+                        : sentEmail
+                        ? 'Already sent'
+                        : 'Send this pitch via your connected Zoho account'
+                    }
+                  >
+                    {sending ? 'Sending…' : sentEmail ? 'Sent ✓' : 'Send via Zoho'}
+                  </Button>
                 </div>
+
+                {sentEmail && (
+                  <div className="mt-3 p-3 bg-muted/50 rounded-md text-xs space-y-1">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <Badge className="bg-indigo-100 text-indigo-800 hover:bg-indigo-100">
+                        sent to {sentEmail.to_email}
+                      </Badge>
+                      <span className="text-muted-foreground">
+                        {new Date(sentEmail.sent_at).toLocaleString()}
+                      </span>
+                      {sentEmail.bounced && (
+                        <Badge className="bg-red-100 text-red-800 hover:bg-red-100">
+                          bounced
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-4 text-muted-foreground">
+                      <span>
+                        <span className="font-semibold text-foreground">{realOpens}</span> opens
+                        {mppOpens > 0 && (
+                          <span className="ml-1 text-muted-foreground/70">(+{mppOpens} likely MPP)</span>
+                        )}
+                      </span>
+                      <span>
+                        <span className="font-semibold text-foreground">{replyCount}</span> replies
+                      </span>
+                    </div>
+                    {sentEmail.bounce_reason && (
+                      <p className="text-destructive">bounce: {sentEmail.bounce_reason}</p>
+                    )}
+                  </div>
+                )}
 
                 {(savedAt || copiedAt) && (
                   <div className="mt-2 text-xs text-muted-foreground">

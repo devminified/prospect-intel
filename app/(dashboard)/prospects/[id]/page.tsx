@@ -93,6 +93,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   const [copiedAt, setCopiedAt] = useState<string | null>(null)
   const [discovering, setDiscovering] = useState(false)
   const [revealingId, setRevealingId] = useState<string | null>(null)
+  const [regenerating, setRegenerating] = useState(false)
 
   useEffect(() => {
     load()
@@ -199,6 +200,25 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       setError(e.message)
     } finally {
       setDiscovering(false)
+    }
+  }
+
+  async function regenerate() {
+    setRegenerating(true)
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/prospects/${id}/regenerate-pitch`, { method: 'POST', headers })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'regenerate failed' }))
+        throw new Error(err.error ?? 'regenerate failed')
+      }
+      await load()
+      setSavedAt(new Date().toLocaleTimeString())
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setRegenerating(false)
     }
   }
 
@@ -409,6 +429,14 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                   className="px-3 py-1.5 bg-gray-600 hover:bg-gray-700 text-white text-sm rounded-md disabled:opacity-50"
                 >
                   {saving ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  onClick={regenerate}
+                  disabled={regenerating}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-sm rounded-md disabled:opacity-50"
+                  title="Re-run Sonnet with the latest enrichment + analysis data"
+                >
+                  {regenerating ? 'Regenerating…' : 'Regenerate'}
                 </button>
                 <button
                   onClick={copy}

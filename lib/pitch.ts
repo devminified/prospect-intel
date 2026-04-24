@@ -46,6 +46,12 @@ export async function generatePitch(prospectId: string): Promise<void> {
     throw new Error(`Analysis not found for prospect ${prospectId}`)
   }
 
+  const { data: enrichment } = await supabaseAdmin
+    .from('enrichments')
+    .select('has_online_booking, tech_stack_json, scraped_data_json')
+    .eq('prospect_id', prospectId)
+    .maybeSingle()
+
   const painPoints = (analysis.pain_points_json ?? []) as Array<{
     pain: string
     evidence: string
@@ -61,6 +67,23 @@ export async function generatePitch(prospectId: string): Promise<void> {
   const city: string = batch?.city ?? 'unknown'
   const category: string = (prospect as any).categories_text ?? batch?.category ?? 'business'
 
+  // Phase 3 (M19): derive booking_status + primary_cta from enrichment so Sonnet
+  // never recommends online booking to a prospect that already has it.
+  const techStack = (enrichment as any)?.tech_stack_json ?? {}
+  const scraped = (enrichment as any)?.scraped_data_json ?? null
+  const hasBooking = Boolean((enrichment as any)?.has_online_booking)
+  let bookingStatus: string
+  if (hasBooking) {
+    const platform = techStack?.booking ?? scraped?.booking_platform ?? 'unknown'
+    bookingStatus =
+      platform && platform !== 'unknown'
+        ? `has online booking via ${platform}`
+        : 'has Book Now button, backend platform unknown'
+  } else {
+    bookingStatus = 'no booking on site at all'
+  }
+  const primaryCta = scraped?.primary_cta?.trim() || 'no visible CTA'
+
   const prompt = pitchPrompt({
     name: prospect.name,
     category,
@@ -68,21 +91,34 @@ export async function generatePitch(prospectId: string): Promise<void> {
     best_angle: analysis.best_angle ?? leadPain.pain,
     evidence: leadPain.evidence,
     solution_category: leadPain.solution_category,
+    primary_cta: primaryCta,
+    booking_status: bookingStatus,
   })
 
   const pitch = await callSonnet(prompt)
 
   warnIfOverBudget(prospect.name, pitch)
 
-  const { error: insertError } = await supabaseAdmin.from('pitches').insert({
-    prospect_id: prospectId,
-    subject: pitch.subject,
-    body: pitch.body,
-    status: 'draft',
-  })
+  // Upsert — allows the Regenerate button to overwrite an existing pitch while
+  // keeping the prospect status progression clean. Resets edited_body and
+  // status on regeneration since the old copy may no longer apply.
+  const { error: upsertError } = await supabaseAdmin
+    .from('pitches')
+    .upsert(
+      {
+        prospect_id: prospectId,
+        subject: pitch.subject,
+        body: pitch.body,
+        edited_body: null,
+        status: 'draft',
+        approved_at: null,
+        sent_at: null,
+      },
+      { onConflict: 'prospect_id' }
+    )
 
-  if (insertError) {
-    throw new Error(`Failed to save pitch: ${insertError.message}`)
+  if (upsertError) {
+    throw new Error(`Failed to save pitch: ${upsertError.message}`)
   }
 
   await supabaseAdmin.from('prospects').update({ status: 'ready' }).eq('id', prospectId)

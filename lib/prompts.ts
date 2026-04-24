@@ -54,6 +54,8 @@ export interface PitchPromptInput {
   best_angle: string
   evidence: string
   solution_category: string
+  primary_cta: string          // e.g. "FREE Consultation" button / "Book Now" / "no visible CTA"
+  booking_status: string       // "has online booking via Zenoti" / "has Book Now button, backend unknown" / "no booking on site at all"
 }
 
 export function pitchPrompt(i: PitchPromptInput): string {
@@ -64,6 +66,8 @@ BUSINESS: ${i.name} (${i.category}, ${i.city})
 PAIN TO LEAD WITH: ${i.best_angle}
 EVIDENCE: ${i.evidence}
 SOLUTION CATEGORY: ${i.solution_category}
+PRIMARY CTA ON SITE: ${i.primary_cta}
+BOOKING STATUS: ${i.booking_status}
 
 STRUCTURE (4 sentences max)
 1. Specific observation of the issue (friendly, not accusatory)
@@ -78,6 +82,14 @@ RULES
 - NEVER use "synergy", "leverage", "cutting-edge", "solutions provider".
 - Reference the specific evidence, not the generic category.
 - No jargon.
+- CRITICAL: if BOOKING STATUS starts with "has online booking" or "has Book Now button",
+  the business already HAS online booking. Do NOT suggest adding online booking. Pick a
+  different pain to lead with instead (AI chatbot for after-hours inquiries, ecommerce
+  for product/membership sales, workflow automation for intake/reminders/follow-ups,
+  website rebuild). If the SOLUTION CATEGORY input says online_booking but BOOKING STATUS
+  shows booking is already present, override it and use a different angle.
+- If PRIMARY CTA is present and specific, you may reference it by name
+  (e.g. "noticed your 'FREE Consultation' button…"). If it's generic or missing, ignore it.
 
 Return ONLY valid JSON matching the required schema.`
 }

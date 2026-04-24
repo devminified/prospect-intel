@@ -718,3 +718,190 @@ Don't build in Phase 2:
 - CRM bidirectional sync. CSV export stays the handoff.
 - Non-US markets, non-English pitch generation. Revisit in Phase 3 if needed.
 
+---
+
+## 15. Phase 3 — Efficiency pass (M16–M19)
+
+Phase 2 shipped the full pipeline but the M13 dogfood exposed real issues:
+
+- The pitch for **Wild and Beautiful Natural Aesthetics** recommended "add online booking" to a clinic that already has a prominent Book Now CTA. Our `has_online_booking` detector only matched Calendly/Acuity/OpenTable/Resy/Square/Yelp — it missed the Squarespace-embedded provider entirely.
+- At **2700 prospects/mo** (90 discovered daily), the M12 Apollo-on-every-prospect model would cost **$400+/mo in email reveals alone** — wasted on leads the user never planned to personally pitch.
+- Cron `run 2` hit the Vercel 60s `FUNCTION_INVOCATION_TIMEOUT` while processing 10 sequential Sonnet calls, leaving 3 jobs stuck in `running` forever (no reaper).
+- Google News press mentions returned generic noise ("Do Beautiful Birds Have an Evolutionary Advantage?" on a med spa audit).
+
+Phase 3 fixes all four with minimal surface area.
+
+### 15.0 What changes vs Phase 2
+
+- **Scraper upgrade:** add **ScrapingBee AI Extract** — send a typed schema, get back `{booking_platform, book_url, services, team_members, primary_cta}` as structured JSON, rendered with JS. Kills the "recommended booking to a site that has booking" class of pitch error.
+- **Booking detector expansion:** add regex for 12 med-spa / local-SMB platforms (Vagaro, Boulevard, Mindbody, Zenoti, GlossGenius, Jane, Mangomint, Fresha, Booker, Schedulicity, Timely, Cliniko) plus a generic `book|appointment|schedule` CTA catch-all.
+- **Apollo becomes opt-in.** `lib/contacts.ts` splits into `discoverPeople` (list, cheap) + `revealEmail` (per-contact, costs 1 credit). Cron no longer runs contact enrichment automatically. Triggers: batch-level "auto-enrich top N by score" checkbox (default N=10) + per-prospect "Find decision makers" button + per-contact "Reveal email" button.
+- **SerpApi trim:** drop Google News press search entirely. Keep only category rank + brand rank. Fits the $50 Developer plan.
+- **Pitch-gate on opportunity_score < 50:** optional per-batch checkbox, default off. When on, skip Sonnet pitch generation for low-scoring prospects.
+- **Stuck-job reaper:** cron run first resets any job in `running` for > 2 min back to `pending` before claiming new work.
+- **Pitch prompt** gets the new scraped fields so it can reference "your Book Today button on the homepage" vs generic suggestions.
+
+### 15.1 Updated tech stack (additions / changes)
+
+| Layer                 | Tool                                                                |
+| --------------------- | ------------------------------------------------------------------- |
+| Rendered scraping + typed extraction | **ScrapingBee Business** with AI Extract endpoint  |
+| Contact discovery     | Apollo — people search only (no email reveal by default)            |
+| Contact email reveal  | Apollo `/people/match` — user-triggered per contact                 |
+| Search rank           | SerpApi Developer (5000 searches/mo) — ranks only, no news           |
+
+No new services. Hunter.io was considered and rejected — user prefers Apollo's LinkedIn + native seniority data and the opt-in model keeps cost within plan quota.
+
+### 15.2 Env vars — unchanged
+
+All Phase 2 env vars carry forward. Apollo uses the same `APOLLO_API_KEY`. SerpApi uses the same `SERPAPI_KEY`. ScrapingBee AI Extract uses the same `SCRAPINGBEE_API_KEY` — just a different endpoint path.
+
+### 15.3 Data model additions
+
+Add migration `20260424_phase3.sql`:
+
+```sql
+-- Track which contacts had their email revealed (an Apollo email credit spent)
+alter table contacts add column email_revealed_at timestamptz;
+
+-- Per-batch settings for the pitch-gate and auto-enrich toggles
+alter table batches add column pitch_score_threshold int;            -- null = no gate
+alter table batches add column auto_enrich_top_n int not null default 0;  -- 0 = no auto-enrich
+
+-- Structured scraped fields from ScrapingBee AI Extract
+alter table enrichments add column scraped_data_json jsonb;
+```
+
+No new tables. No RLS changes needed.
+
+### 15.4 Pipeline flow
+
+```
+enrich → analyze → audit → [pitch_gate?] → pitch
+                      │
+                      └─ for top N prospects: discover_contacts
+```
+
+Key changes:
+- `find_contacts` renamed **`discover_contacts`** semantically (list search only). Cron no longer auto-chains it — triggered by batch flag `auto_enrich_top_n` or by explicit user action.
+- `audit_visibility` is now a sibling of `analyze`, both fan out from `enrich`. No change to downstream.
+- Email reveal is **not a cron job** — it runs inline in the API route when the user clicks "Reveal email" on a contact row.
+
+### 15.5 Folder changes
+
+```
+lib/
+├── scrape/
+│   ├── cheerio.ts           ← NEW: extract fn moved from enrich.ts
+│   └── scrapingbee.ts       ← NEW: render + AI Extract client
+├── enrich.ts                ← slimmed: orchestrates cheerio + scrapingbee
+├── contacts.ts              ← split: discoverPeople + revealEmail exports
+└── booking-platforms.ts     ← NEW: regex table for 12 SMB booking platforms
+
+app/api/
+├── prospects/[id]/discover-contacts/route.ts   ← NEW: manual trigger
+├── prospects/[id]/contacts/[contactId]/reveal/route.ts  ← NEW: per-contact reveal
+└── cron/process/route.ts    ← adds stuck-job reaper; drops find_contacts from auto-chain
+```
+
+### 15.6 Milestone plan
+
+Each milestone ends with: commit, push, verify Vercel deploy is green, manually test one real prospect end-to-end.
+
+#### M16 — Scraper upgrade (Phase 3-A)
+
+- Add `lib/scrape/scrapingbee.ts` with `renderPage(url)` (existing behavior) and new `extractTypedFields(url, schema)` calling ScrapingBee AI Extract.
+- Move existing Cheerio detectors to `lib/scrape/cheerio.ts`. Add `lib/booking-platforms.ts` with the 12-platform table + generic Book Now regex.
+- `lib/enrich.ts` orchestrates: Cheerio first, ScrapingBee render fallback if <500 chars, AI Extract once (for `team_members`, `services`, `primary_cta`, `book_url`, `booking_platform`), write everything to `enrichments.scraped_data_json`.
+- ✅ Verify: re-enrich Wild and Beautiful → `scraped_data_json.booking_platform` is populated (Squarespace native or detected provider) AND `has_online_booking=true`. Pitch regenerated from this enrichment no longer recommends booking.
+
+#### M17 — Apollo smart opt-in (Phase 3-B)
+
+- `lib/contacts.ts` splits into `discoverPeople(prospectId)` (calls `/mixed_people/api_search`, writes contacts rows with `email=null`) and `revealEmail(contactId)` (calls `/people/match`, updates the single row, sets `email_revealed_at`).
+- Remove `find_contacts` from cron auto-chain.
+- Cron checks `batches.auto_enrich_top_n` at audit-completion boundary: if set, enqueue `discover_contacts` for top N prospects in the batch (sorted by `analyses.opportunity_score`).
+- New API routes: `POST /api/prospects/:id/discover-contacts` and `POST /api/prospects/:id/contacts/:contactId/reveal`. Both JWT-validated.
+- UI updates: batch create form gets "Auto-enrich top ___ leads" input (default 10, 0 = off). Prospect detail gets "Find decision makers" button when no contacts exist. Each contact row gets "Reveal email" button when email is null.
+- ✅ Verify: 10-prospect batch with `auto_enrich_top_n=3` runs Apollo on exactly 3 prospects. Remaining 7 have no contacts. Clicking "Find decision makers" on one of the 7 triggers discovery. Clicking "Reveal email" on a discovered contact without email spends exactly 1 credit.
+
+#### M18 — SerpApi trim + pitch gate + stuck-job reaper (Phase 3-C)
+
+- `lib/audit.ts`: delete `fetchPressSignals`. `press_mentions_count` and `press_mentions_sample_json` become null. UI panel hides that section when null.
+- Batch create form: "Skip pitch for prospects scoring below ___" input (blank = off). Cron reads `batches.pitch_score_threshold`, at analyze-done boundary checks score, skips chaining pitch if below.
+- `app/api/cron/process/route.ts` adds at the top of the handler:
+  ```ts
+  await supabaseAdmin.from('jobs')
+    .update({ status: 'pending' })
+    .eq('status', 'running')
+    .lt('processed_at', new Date(Date.now() - 2 * 60 * 1000).toISOString())
+  ```
+  This runs before claim, freeing stuck jobs automatically every 2 minutes.
+- ✅ Verify: induce a stuck running job → next cron run resets it. Submit a batch with pitch_score_threshold=60 → prospects scoring <60 have status=`analyzed` with no pitch. Submit without threshold → behaves as before.
+
+#### M19 — Pitch prompt uses scraped data (Phase 3-D)
+
+- `lib/prompts.ts`: pitch prompt receives two new inputs:
+  - `{primary_cta}`: e.g. "Book Today" button / "Schedule Consultation" button / "no visible CTA"
+  - `{booking_status}`: "has online booking via Boulevard" / "has Book Now button but no backend platform detected" / "no booking on site at all"
+- New rule in the prompt: if `booking_status` indicates booking is already present, DO NOT recommend online booking — pick a different pain to lead with (chatbot, ecommerce, automation).
+- Sonnet regenerates existing pitches if user clicks "Regenerate" on the pitch panel (new button).
+- ✅ Verify: Wild and Beautiful pitch regenerated with new inputs no longer recommends online booking.
+
+### 15.7 Definition of Done (Phase 3)
+
+- [ ] Re-running the M13 Austin med spa batch: zero pitches recommend online booking to prospects that already have it.
+- [ ] A 10-prospect batch with `auto_enrich_top_n=3` consumes ≤ 3 Apollo search calls and 0 email credits until user clicks "Reveal email".
+- [ ] Monthly bill at 2700 prospects/mo stays under **$650** with ~150 email reveals/mo.
+- [ ] Stuck-job reaper demonstrably recovers jobs after a forced timeout.
+- [ ] Total code stays under **6000 lines**.
+
+### 15.8 Prompts (additions)
+
+Added to `lib/prompts.ts`:
+
+**ScrapingBee AI Extract schema** (not a prompt per se, but what we send them):
+
+```json
+{
+  "booking_platform": "string — the specific booking/scheduling platform used on this site (Vagaro, Boulevard, Mindbody, Calendly, Acuity, Squarespace Scheduling, etc.) or 'none' if no online booking is available",
+  "book_url": "string — full URL of the primary booking link if one exists, or empty string",
+  "primary_cta": "string — the text of the most prominent call-to-action button visible on the homepage",
+  "services": ["array of the services/treatments offered, max 10"],
+  "team_members": [
+    {
+      "name": "string",
+      "title": "string",
+      "bio_url": "string"
+    }
+  ]
+}
+```
+
+**Pitch prompt additions** in §9: see §15.6 M19 for the `{primary_cta}` and `{booking_status}` placeholders and the "do not recommend booking if already present" rule.
+
+### 15.9 Budget expectations (locked)
+
+At 2700 prospects discovered/mo, ~150 email reveals/mo:
+
+| Component       | Cost    |
+| --------------- | ------- |
+| Google Places   | ~$90    |
+| ScrapingBee Business (render + AI Extract) | $99 |
+| Apollo Professional (150 reveals incl.)   | $79   |
+| Apollo extras (if >150 reveals)           | ~$0-$18 |
+| SerpApi Developer (5000 searches)          | $50    |
+| Anthropic (analyze + pitch × 2700)         | ~$270  |
+| Groq (bulk summaries)                       | ~$15   |
+| **TOTAL**                                   | **~$603–$621/mo** |
+
+With `pitch_score_threshold=50` filtering out ~30% of leads, Anthropic drops by ~$80 → total **~$520/mo**.
+
+### 15.10 Phase 3 out-of-scope (still)
+
+- Hunter.io or other secondary contact sources. Apollo covers the need now that reveals are opt-in.
+- Multi-region Places searches. Single-city batches stay.
+- Scheduled batch refresh (re-running the same city monthly). Separate feature.
+- Full-text pitch regeneration based on rolling feedback. The "Regenerate" button just re-calls the prompt; no RL loop.
+- GMB Posts / Reviews API write-back. Purely read.
+- LinkedIn Sales Navigator scraping. Still a ToS landmine.
+

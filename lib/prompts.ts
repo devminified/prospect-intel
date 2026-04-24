@@ -157,6 +157,82 @@ RULES
 Return ONLY valid JSON matching the required schema. No preamble, no markdown.`
 }
 
+export interface ChannelRecommendationPromptInput {
+  name: string
+  category: string
+  city: string
+  opportunity_score: number | null
+  best_angle: string | null
+  primary_pain: string | null
+  primary_contact: {
+    first_name: string | null
+    title: string | null
+    seniority: string | null
+  } | null
+  contacts_count: number
+  has_business_phone: boolean
+  has_verified_email: boolean
+  visibility_summary: string | null
+  booking_status: string
+}
+
+export function channelRecommendationPrompt(i: ChannelRecommendationPromptInput): string {
+  const contact = i.primary_contact
+    ? `${i.primary_contact.first_name ?? 'unknown first name'} (${i.primary_contact.title ?? 'unknown title'}, seniority: ${i.primary_contact.seniority ?? 'unknown'})`
+    : 'no primary contact discovered'
+  const score = i.opportunity_score != null ? String(i.opportunity_score) : 'unscored'
+
+  return `You recommend the best outreach channel (phone vs email) for this prospect
+and write a cold-call opening script if phone is the recommended channel.
+
+This is NOT a statistical close-rate prediction — it's a channel-fit heuristic.
+Score each channel 0-100 based on how receptive this specific prospect is likely
+to be on that channel, given their business profile and decision-maker accessibility.
+
+BUSINESS: ${i.name} (${i.category}, ${i.city})
+OPPORTUNITY SCORE: ${score}
+PRIMARY PAIN: ${i.primary_pain ?? 'not identified'}
+BEST ANGLE: ${i.best_angle ?? 'not identified'}
+BOOKING STATUS: ${i.booking_status}
+
+CONTACT LANDSCAPE
+- Primary contact: ${contact}
+- Other contacts discovered: ${Math.max(i.contacts_count - 1, 0)}
+- Business phone available: ${i.has_business_phone ? 'yes' : 'no'}
+- Verified decision-maker email: ${i.has_verified_email ? 'yes' : 'no'}
+
+VISIBILITY SNAPSHOT: ${i.visibility_summary ?? 'not audited'}
+
+HEURISTICS TO APPLY
+Phone-leaning signals:
+- Local B2C / services (restaurants, med spas, HVAC, landscaping, dental, law firms)
+- Owner-operator or small team (1-3 contacts discovered)
+- Business phone publicly listed on GMB
+- Low digital sophistication (no booking, no chat, basic website)
+- Founder/owner as primary contact
+
+Email-leaning signals:
+- B2B or larger organization (5+ contacts discovered)
+- C-suite / VP with likely gatekeepers
+- Verified email on file for decision-maker
+- High digital sophistication (modern stack, active ads, strong social)
+- Manager or director level primary contact
+
+If signals are mixed or weak, recommend "either" with fit scores within 10 points of each other.
+
+PHONE SCRIPT RULES (only required if recommended_channel is "phone" or "either")
+- 60-80 words total. Reads in 25-35 seconds.
+- Open with a pattern-interrupt + first-name ONLY if primary_contact first name is known.
+- Reference one concrete observation from PRIMARY PAIN or BEST ANGLE — not generic.
+- Assume you'll hit a gatekeeper or the decision-maker directly; write for either.
+- End with a permission ask ("got 30 seconds?") — NOT a hard pitch close.
+- Conversational, not read-from-a-script stiff. Contractions are fine.
+- NEVER use "synergy", "leverage", "cutting-edge", "solutions provider", "I help businesses like yours".
+- If no first name is known, open with "Hey, is this ${i.name.split(/\s+/)[0]}?" style.
+
+Return ONLY valid JSON matching the required schema.`
+}
+
 export interface AnalysisPromptInput {
   name: string
   category: string

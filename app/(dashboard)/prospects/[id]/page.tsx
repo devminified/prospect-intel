@@ -53,6 +53,15 @@ interface Audit {
   visibility_summary: string | null
 }
 
+interface Recommendation {
+  phone_fit_score: number
+  email_fit_score: number
+  recommended_channel: 'phone' | 'email' | 'either'
+  reasoning: string | null
+  phone_script: string | null
+  generated_at: string | null
+}
+
 interface Detail {
   prospect: {
     id: string
@@ -90,6 +99,7 @@ interface Detail {
   } | null
   contacts: Contact[]
   audit: Audit | null
+  recommendation: Recommendation | null
 }
 
 const PROSPECT_STATUSES = ['new', 'enriched', 'analyzed', 'ready', 'contacted', 'replied', 'rejected']
@@ -112,6 +122,8 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   const [discovering, setDiscovering] = useState(false)
   const [revealingId, setRevealingId] = useState<string | null>(null)
   const [regenerating, setRegenerating] = useState(false)
+  const [recommending, setRecommending] = useState(false)
+  const [scriptCopiedAt, setScriptCopiedAt] = useState<string | null>(null)
 
   useEffect(() => {
     load()
@@ -121,13 +133,14 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
     setLoading(true)
     setError('')
 
-    const [pRes, eRes, aRes, pitchRes, cRes, vRes] = await Promise.all([
+    const [pRes, eRes, aRes, pitchRes, cRes, vRes, rRes] = await Promise.all([
       supabase.from('prospects').select('*').eq('id', id).single(),
       supabase.from('enrichments').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('analyses').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('pitches').select('subject, body, edited_body, status').eq('prospect_id', id).maybeSingle(),
       supabase.from('contacts').select('id, full_name, title, seniority, department, email, email_confidence, linkedin_url, is_primary').eq('prospect_id', id),
       supabase.from('visibility_audits').select('*').eq('prospect_id', id).maybeSingle(),
+      supabase.from('channel_recommendations').select('phone_fit_score, email_fit_score, recommended_channel, reasoning, phone_script, generated_at').eq('prospect_id', id).maybeSingle(),
     ])
 
     if (pRes.error) {
@@ -143,6 +156,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       pitch: (pitchRes.data as any) ?? null,
       contacts: (cRes.data as Contact[]) ?? [],
       audit: (vRes.data as Audit) ?? null,
+      recommendation: (rRes.data as Recommendation) ?? null,
     }
     setDetail(d)
     setEditedBody(d.pitch?.edited_body ?? d.pitch?.body ?? '')
@@ -265,11 +279,37 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
     })
   }
 
+  async function generateRecommendation() {
+    setRecommending(true)
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/prospects/${id}/recommend-channel`, { method: 'POST', headers })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'recommendation failed' }))
+        throw new Error(err.error ?? 'recommendation failed')
+      }
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setRecommending(false)
+    }
+  }
+
+  function copyScript() {
+    const text = detail?.recommendation?.phone_script ?? ''
+    if (!text) return
+    navigator.clipboard.writeText(text).then(() => {
+      setScriptCopiedAt(new Date().toLocaleTimeString())
+    })
+  }
+
   if (loading) return <div className="text-muted-foreground">Loading…</div>
   if (error && !detail) return <div className="text-destructive">{error}</div>
   if (!detail) return <div className="text-muted-foreground">Not found.</div>
 
-  const { prospect, enrichment, analysis, pitch, contacts, audit } = detail
+  const { prospect, enrichment, analysis, pitch, contacts, audit, recommendation } = detail
   const sortedContacts = [...contacts].sort((a, b) => {
     if (a.is_primary !== b.is_primary) return a.is_primary ? -1 : 1
     return seniorityRank(a.seniority) - seniorityRank(b.seniority)
@@ -555,6 +595,93 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
         </Card>
       )}
 
+      {/* Channel recommendation — on-demand, Sonnet-generated */}
+      <Card>
+        <CardHeader className="flex-row items-baseline justify-between">
+          <CardTitle className="text-base">Best outreach channel</CardTitle>
+          {recommendation && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground font-normal">
+                {recommendation.generated_at
+                  ? `generated ${new Date(recommendation.generated_at).toLocaleString()}`
+                  : 'generated'}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={generateRecommendation}
+                disabled={recommending}
+              >
+                {recommending ? 'Regenerating…' : 'Regenerate'}
+              </Button>
+            </div>
+          )}
+        </CardHeader>
+        <CardContent>
+          {!recommendation ? (
+            <div className="text-center py-6">
+              <p className="text-sm text-muted-foreground mb-1">
+                No channel recommendation yet.
+              </p>
+              <p className="text-xs text-muted-foreground mb-4 max-w-md mx-auto">
+                Sonnet will score phone vs email fit for this specific prospect and
+                write a cold-call opening if phone is the better channel. Heuristic,
+                not a statistical close-rate prediction.
+              </p>
+              <Button onClick={generateRecommendation} disabled={recommending}>
+                {recommending ? 'Thinking…' : 'Suggest best channel'}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 flex-wrap">
+                <Badge
+                  className={
+                    recommendation.recommended_channel === 'phone'
+                      ? 'bg-green-100 text-green-800 hover:bg-green-100'
+                      : recommendation.recommended_channel === 'email'
+                      ? 'bg-blue-100 text-blue-800 hover:bg-blue-100'
+                      : 'bg-secondary text-secondary-foreground hover:bg-secondary'
+                  }
+                >
+                  recommended: {recommendation.recommended_channel}
+                </Badge>
+                {recommendation.reasoning && (
+                  <p className="text-sm text-muted-foreground flex-1 min-w-[280px]">{recommendation.reasoning}</p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FitBar label="Phone" score={recommendation.phone_fit_score} accent="green" />
+                <FitBar label="Email" score={recommendation.email_fit_score} accent="blue" />
+              </div>
+
+              {recommendation.phone_script && (
+                <div>
+                  <div className="flex items-baseline justify-between mb-1">
+                    <div className="text-xs font-semibold uppercase text-muted-foreground">
+                      Phone opening script
+                    </div>
+                    <Button variant="outline" size="sm" onClick={copyScript}>
+                      Copy script
+                    </Button>
+                  </div>
+                  <div className="p-3 bg-muted/50 rounded-md text-sm leading-relaxed whitespace-pre-wrap">
+                    {recommendation.phone_script}
+                  </div>
+                  {scriptCopiedAt && (
+                    <div className="mt-1 text-xs text-muted-foreground">copied at {scriptCopiedAt}</div>
+                  )}
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Reads in ~25–35 seconds. Adjust tone to match your voice before dialing.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Executives panel — full width below the 3-panel grid */}
       <Card>
         <CardHeader className="flex-row items-baseline justify-between">
@@ -688,6 +815,22 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
       <div className="text-xs font-semibold uppercase text-muted-foreground">{label}</div>
       <div className="mt-1 text-xl font-bold">{value}</div>
       {sub && <div className="text-xs text-muted-foreground">{sub}</div>}
+    </div>
+  )
+}
+
+function FitBar({ label, score, accent }: { label: string; score: number; accent: 'green' | 'blue' }) {
+  const bar = accent === 'green' ? 'bg-green-500' : 'bg-blue-500'
+  const pct = Math.max(0, Math.min(100, score))
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline justify-between">
+        <div className="text-xs font-semibold uppercase text-muted-foreground">{label} fit</div>
+        <div className="text-xl font-bold tabular-nums">{pct}</div>
+      </div>
+      <div className="h-2 rounded-full bg-muted overflow-hidden">
+        <div className={`h-full ${bar} transition-all`} style={{ width: `${pct}%` }} />
+      </div>
     </div>
   )
 }

@@ -79,6 +79,7 @@ Per-task playbooks in `docs/playbooks/`:
 - **Phase 3 (M16–M19)** — ScrapingBee AI Extract, 16-platform booking regex, Apollo opt-in, pitch gate, stuck-job reaper, pitch uses scraped data. `archive/phase-3-efficiency.md`
 - **Phase 4A (M20)** — Daily lead planner with ICP + Opus 4.7. Dogfooded 2026-04-24. `archive/phase-4a-planner.md`
 - **M21** — shadcn/ui migration across all 9 dashboard pages + CLAUDE.md restructure.
+- **M22** — On-demand channel-fit recommendation per prospect (Sonnet scores phone vs email + writes cold-call opening script). New `channel_recommendations` table, `POST /api/prospects/:id/recommend-channel`, UI panel on prospect detail, CSV export columns added.
 
 **Active:** see `docs/phases/CURRENT.md`. Today: none.
 

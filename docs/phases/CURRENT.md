@@ -1,9 +1,9 @@
 # Current phase
 
-**Active:** none. Phase 4A (M20) + M21 (shadcn migration) shipped 2026-04-24.
+**Active:** none. M22 (channel recommendation) shipped 2026-04-24 after the Phase 4A + M21 shadcn work.
 
 **Next candidates (not started):**
-- **Phase 4B** — Instantly/Smartlead send integration + reply-rate feedback into the planner
+- **Phase 4B** — Instantly/Smartlead send integration + reply-rate feedback into the planner and channel-fit scores
 - **Phase 4C** — Daily 08:00 UTC cron auto-generating plans, Google Trends/News momentum signals via SerpApi, reply-email classifier (Haiku), multi-user shared plan calendar
 
 When a new phase starts, replace this file's contents with:

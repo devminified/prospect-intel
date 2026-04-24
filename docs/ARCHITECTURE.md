@@ -74,6 +74,7 @@ prospect-intel/
 │   │   ├── prospects/[id]/route.ts                   ← PATCH: status / pitch edits
 │   │   ├── prospects/[id]/discover-contacts/route.ts ← POST: Apollo people search
 │   │   ├── prospects/[id]/contacts/[contactId]/reveal/route.ts ← POST: reveal email
+│   │   ├── prospects/[id]/recommend-channel/route.ts ← POST: Sonnet channel fit + phone script
 │   │   ├── prospects/[id]/regenerate-pitch/route.ts  ← POST: re-run Sonnet
 │   │   └── test/                                     ← CRON_SECRET-gated per-stage invokers
 │   │       ├── analyze-one/route.ts
@@ -81,7 +82,8 @@ prospect-intel/
 │   │       ├── contacts-one/route.ts
 │   │       ├── enrich-demo/route.ts
 │   │       ├── enrich-one/route.ts
-│   │       └── pitch-one/route.ts
+│   │       ├── pitch-one/route.ts
+│   │       └── recommend-one/route.ts
 │   ├── layout.tsx                                    ← root <html>
 │   └── page.tsx                                      ← redirects "/" → "/batches"
 ├── components/ui/                                    ← shadcn primitives (Base UI + Tailwind)
@@ -99,6 +101,7 @@ prospect-intel/
 │   ├── places.ts                                     ← Google Places (New): Text Search + Details
 │   ├── plans.ts                                      ← planner (Opus) + executePlan
 │   ├── prompts.ts                                    ← SINGLE source of truth for prompt templates
+│   ├── recommend.ts                                  ← Sonnet: channel fit scores + phone script
 │   ├── queue.ts                                      ← enqueueJob / getNextJobs / markJob* helpers
 │   ├── scrape/
 │   │   └── scrapingbee.ts                            ← renderPage + extractTypedFields
@@ -113,7 +116,8 @@ prospect-intel/
 │   ├── 20260422180000_contacts.sql                   ← M12 contacts + RLS
 │   ├── 20260423000000_visibility_audits.sql          ← M13 visibility_audits + RLS
 │   ├── 20260424000000_phase3.sql                     ← M18: score threshold, auto_enrich, scraped_data
-│   └── 20260424120000_plans.sql                      ← M20: icp_profile, lead_plans, lead_plan_items
+│   ├── 20260424120000_plans.sql                      ← M20: icp_profile, lead_plans, lead_plan_items
+│   └── 20260424180000_channel_recommendations.sql    ← M22: channel_recommendations
 ├── .env.local.example                                ← all env keys, empty values
 ├── .mcp.json                                         ← Playwright MCP for local QA
 ├── vercel.json                                       ← cron schedule */2 * * * *
@@ -149,6 +153,7 @@ Six core tables — see `supabase/migrations/20260420181100_init.sql` for the au
 - **`contacts`** — one row per person. Fields: prospect_id, full_name, title, seniority, department, email, email_confidence, phone, linkedin_url, apollo_person_id, is_primary, email_revealed_at
 - **`visibility_audits`** — one per prospect. Fields: gmb_*, social_links_json, follower counts, serp_rank_main, serp_rank_brand, meta_ads_*, visibility_summary
 - **`pitches`** — Sonnet output. Fields: subject, body, edited_body, status (draft | approved | sent | replied), timestamps
+- **`channel_recommendations`** — on-demand, one per prospect. Fields: phone_fit_score, email_fit_score, recommended_channel (phone | email | either), reasoning, phone_script, generated_at
 - **`jobs`** — the simple queue. Fields: batch_id, prospect_id, job_type, status (pending | running | done | failed), attempts, last_error, created_at, processed_at
 
 Phase 4A added:

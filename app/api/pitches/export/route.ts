@@ -1,7 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 
-const CSV_COLUMNS = ['name', 'website', 'email', 'subject', 'body', 'phone'] as const
+const CSV_COLUMNS = [
+  'name',
+  'website',
+  'email',
+  'subject',
+  'body',
+  'phone',
+  'recommended_channel',
+  'phone_fit_score',
+  'email_fit_score',
+  'phone_script',
+] as const
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization')
@@ -34,7 +45,20 @@ export async function GET(request: NextRequest) {
 
   const { data: rows, error: rowsError } = await supabaseAdmin
     .from('pitches')
-    .select('subject, body, edited_body, prospects!inner(name, website, email, phone, batch_id)')
+    .select(`
+      subject,
+      body,
+      edited_body,
+      prospects!inner(
+        id,
+        name,
+        website,
+        email,
+        phone,
+        batch_id,
+        channel_recommendations(recommended_channel, phone_fit_score, email_fit_score, phone_script)
+      )
+    `)
     .eq('status', 'approved')
     .eq('prospects.batch_id', batchId)
 
@@ -46,6 +70,9 @@ export async function GET(request: NextRequest) {
 
   for (const row of (rows ?? []) as any[]) {
     const p = row.prospects ?? {}
+    const rec = Array.isArray(p.channel_recommendations)
+      ? p.channel_recommendations[0] ?? null
+      : p.channel_recommendations ?? null
     const bodyToSend: string = row.edited_body ?? row.body ?? ''
     const values = [
       p.name ?? '',
@@ -54,6 +81,10 @@ export async function GET(request: NextRequest) {
       row.subject ?? '',
       bodyToSend,
       p.phone ?? '',
+      rec?.recommended_channel ?? '',
+      rec?.phone_fit_score != null ? String(rec.phone_fit_score) : '',
+      rec?.email_fit_score != null ? String(rec.email_fit_score) : '',
+      rec?.phone_script ?? '',
     ]
     csvLines.push(values.map(csvEscape).join(','))
   }

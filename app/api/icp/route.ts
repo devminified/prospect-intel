@@ -54,6 +54,7 @@ export async function PATCH(request: NextRequest) {
     require_instagram: !!body.require_instagram,
     require_facebook: !!body.require_facebook,
     require_business_phone: !!body.require_business_phone,
+    require_reachable: !!body.require_reachable,
     updated_at: new Date().toISOString(),
   }
 

@@ -11,28 +11,49 @@ import { fromB64url } from '@/lib/email/templates'
 export async function GET(request: NextRequest) {
   const token = request.nextUrl.searchParams.get('t')
   if (!token) return renderPage('Missing token.', 400)
-  const contactId = fromB64url(token)
-  if (!contactId) return renderPage('Invalid token.', 400)
+  const decoded = fromB64url(token)
+  if (!decoded) return renderPage('Invalid token.', 400)
 
-  const { data: contact } = await supabaseAdmin
-    .from('contacts')
-    .select('id, email, full_name')
-    .eq('id', contactId)
-    .maybeSingle()
+  // Token formats:
+  //   "contact:UUID" — Apollo-discovered contact; look up by id
+  //   "email:address" — business-email recipient; use directly
+  //   bare UUID      — legacy (pre-business-email) tokens; treat as contact id
+  let email: string | null = null
+  if (decoded.startsWith('contact:')) {
+    const id = decoded.slice('contact:'.length)
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('email')
+      .eq('id', id)
+      .maybeSingle()
+    email = contact?.email ?? null
+  } else if (decoded.startsWith('email:')) {
+    email = decoded.slice('email:'.length)
+  } else {
+    // legacy: bare contact UUID
+    const { data: contact } = await supabaseAdmin
+      .from('contacts')
+      .select('email')
+      .eq('id', decoded)
+      .maybeSingle()
+    email = contact?.email ?? null
+  }
 
-  if (!contact?.email) return renderPage('We could not find that contact.', 404)
+  if (!email || !email.includes('@')) {
+    return renderPage('We could not find that recipient.', 404)
+  }
 
-  const email = contact.email.toLowerCase()
+  const lowered = email.toLowerCase()
   const { error } = await supabaseAdmin
     .from('email_unsubs')
-    .upsert({ contact_email: email, reason: 'user_clicked_unsub' }, { onConflict: 'contact_email' })
+    .upsert({ contact_email: lowered, reason: 'user_clicked_unsub' }, { onConflict: 'contact_email' })
 
   if (error) {
     return renderPage(`Something went wrong: ${error.message}`, 500)
   }
 
   return renderPage(
-    `You've been unsubscribed. ${contact.email} will not receive further outreach from us.`,
+    `You've been unsubscribed. ${email} will not receive further outreach from us.`,
     200
   )
 }

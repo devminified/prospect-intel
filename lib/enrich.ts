@@ -2,6 +2,7 @@ import * as cheerio from 'cheerio'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { renderPage, extractTypedFields, type ScrapedStructuredData } from '@/lib/scrape/scrapingbee'
 import { detectBookingPlatform, hasBookingCTA } from '@/lib/booking-platforms'
+import { extractEmailsFromHtml, pickBestEmail } from '@/lib/email-discovery'
 
 interface TechStack {
   has_website: boolean
@@ -210,6 +211,25 @@ export async function enrichProspect(prospectId: string): Promise<void> {
     fetched_at: now,
     scraped_data_json: scraped,
   })
+
+  // Discover a business-level email from the homepage HTML so B2C prospects
+  // that Apollo can't find still have a usable contact path. Only writes to
+  // prospects.email if the column is currently empty — preserves anything an
+  // Apollo reveal already populated.
+  if (html && !prospect.email) {
+    const candidates = extractEmailsFromHtml(html)
+    const best = pickBestEmail(candidates, prospect.website)
+    if (best.email) {
+      await supabaseAdmin
+        .from('prospects')
+        .update({
+          email: best.email,
+          email_source: best.email_source,
+          email_confidence: best.email_confidence,
+        })
+        .eq('id', prospectId)
+    }
+  }
 
   await markProspectEnriched(prospectId, prospect.batch_id)
 }

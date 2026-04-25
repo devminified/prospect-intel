@@ -98,3 +98,34 @@ Fix: `email_opens.is_probably_self boolean` + `email_accounts.known_self_ips tex
 - Prospect detail open count now excludes BOTH `is_probably_mpp` AND `is_probably_self`. Both sub-counts surface separately for transparency: "5 opens (+2 likely MPP, +1 self)".
 
 This catches any opens that arrive from the user's known IPs — Sent folder views, browser previews, accidental self-opens. Recipient opens from real prospect IPs continue to count normally.
+
+### M28 — Business email discovery (B2C reachability)
+
+User-reported: B2C categories (restaurants, salons, single-location HVAC) couldn't be pitched because Apollo's data is B2B-leaning — "owner" of a hair salon isn't on LinkedIn so people-search returns nothing. The `require_linkedin` filter became a proxy for "we can find an email", which dropped real targets.
+
+Fix: scrape the prospect's own website during enrichment. Most B2C SMBs publish a contact email (`info@medspa.com`, `hello@hairsalon.com`) somewhere on the homepage.
+
+Migration `20260425220000_email_discovery.sql`:
+- `prospects.email_source text` — `'website_scrape'` | `'apollo'` | null
+- `prospects.email_confidence text` — `'verified'` (matches business domain) | `'guessed'` (different domain, e.g. owner's Gmail) | null
+- `icp_profile.require_reachable boolean` — new hard filter that passes if the prospect has ANY usable contact path
+
+`lib/email-discovery.ts` (pure functions): `extractEmailsFromHtml` pulls every `mailto:` link + plaintext email-regex match. `pickBestEmail` filters out vendor-platform addresses (Squarespace, Wix, Calendly form noise via a domain blacklist), prefers emails that match the business's registrable domain, and ranks by localpart (`owner` > `hello` > `contact` > `info` > `admin` > rest).
+
+`lib/enrich.ts` calls these after the homepage HTML parse and writes the result to `prospects.email` only if it's currently empty (preserves anything an Apollo reveal already populated).
+
+`app/api/pitches/[id]/send/route.ts` recipient priority:
+1. Apollo primary contact with revealed email (best — has a first name for personalization)
+2. Any Apollo contact with revealed email
+3. Business email scraped from the website (B2C fallback — no name)
+
+Unsub token format updated to handle the no-contact case:
+- `contact:UUID` — Apollo-discovered contact, look up by id
+- `email:address` — business-email recipient, use directly
+- bare UUID — legacy tokens still resolve as contact ids
+
+Cron processor `checkSocialIcpGate` now respects `require_reachable`: prospect passes if any contact email exists, OR `prospects.email` is set, OR `prospects.phone` exists.
+
+ICP form gets the new toggle ranked first as the recommended option, with copy steering users away from `require_linkedin` toward `require_reachable` for B2C-friendly ICPs.
+
+Deferred: Hunter.io / Snov.io paid email lookup as a fallback when website scraping returns nothing. Skipped for now per user direction — measure organic coverage first.

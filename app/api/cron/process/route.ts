@@ -218,7 +218,7 @@ async function enqueueNext(job: Job): Promise<void> {
 async function checkSocialIcpGate(userId: string, prospectId: string): Promise<string | null> {
   const { data: icp } = await supabaseAdmin
     .from('icp_profile')
-    .select('require_linkedin, require_instagram, require_facebook, require_business_phone')
+    .select('require_linkedin, require_instagram, require_facebook, require_business_phone, require_reachable')
     .eq('user_id', userId)
     .maybeSingle()
   if (!icp) return null
@@ -227,18 +227,20 @@ async function checkSocialIcpGate(userId: string, prospectId: string): Promise<s
   const reqInstagram = !!(icp as any).require_instagram
   const reqFacebook = !!(icp as any).require_facebook
   const reqPhone = !!(icp as any).require_business_phone
+  const reqReachable = !!(icp as any).require_reachable
 
-  if (!reqLinkedin && !reqInstagram && !reqFacebook && !reqPhone) return null
+  if (!reqLinkedin && !reqInstagram && !reqFacebook && !reqPhone && !reqReachable) return null
 
   const [auditRes, contactsRes, prospectRes] = await Promise.all([
     supabaseAdmin.from('visibility_audits').select('social_links_json').eq('prospect_id', prospectId).maybeSingle(),
-    supabaseAdmin.from('contacts').select('linkedin_url').eq('prospect_id', prospectId),
-    supabaseAdmin.from('prospects').select('phone').eq('id', prospectId).maybeSingle(),
+    supabaseAdmin.from('contacts').select('email, linkedin_url').eq('prospect_id', prospectId),
+    supabaseAdmin.from('prospects').select('phone, email').eq('id', prospectId).maybeSingle(),
   ])
 
   const socialLinks = ((auditRes.data as any)?.social_links_json ?? {}) as Record<string, string | null>
   const contacts = (contactsRes.data as any[]) ?? []
   const phone = (prospectRes.data as any)?.phone ?? null
+  const businessEmail = (prospectRes.data as any)?.email ?? null
 
   const missing: string[] = []
   if (reqLinkedin) {
@@ -249,6 +251,13 @@ async function checkSocialIcpGate(userId: string, prospectId: string): Promise<s
   if (reqInstagram && !socialLinks.instagram) missing.push('Instagram')
   if (reqFacebook && !socialLinks.facebook) missing.push('Facebook')
   if (reqPhone && !phone) missing.push('business phone')
+
+  // Reachability: prospect must have at least one way to be contacted
+  if (reqReachable) {
+    const anyContactEmail = contacts.some((c) => c.email)
+    const reachable = anyContactEmail || !!businessEmail || !!phone
+    if (!reachable) missing.push('any contact info (email or phone)')
+  }
 
   if (missing.length === 0) return null
   return `ICP requires ${missing.join(' + ')} — none found`

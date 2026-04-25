@@ -24,7 +24,7 @@ export async function POST(
   }
   const userId = userData.user.id
 
-  // 2. Load pitch + ownership check + contact
+  // 2. Load pitch + ownership check + contact + business email
   const { data: pitch, error: pitchErr } = await supabaseAdmin
     .from('pitches')
     .select(`
@@ -32,6 +32,9 @@ export async function POST(
       prospects!inner(
         id,
         name,
+        email,
+        email_source,
+        email_confidence,
         batches!inner(user_id),
         contacts(id, full_name, email, is_primary)
       )
@@ -47,12 +50,29 @@ export async function POST(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  // 3. Pick recipient — primary contact with a revealed email, else any contact with email
+  // 3. Pick recipient. Priority:
+  //    a) Apollo primary contact with revealed email (best — has a real name)
+  //    b) Any Apollo contact with revealed email
+  //    c) Business email scraped from the website (B2C fallback — no name)
+  // Pitch personalization adapts based on whether we have a first name.
   const contacts: any[] = prospect?.contacts ?? []
-  const primary = contacts.find((c) => c.is_primary && c.email) ?? contacts.find((c) => c.email)
-  if (!primary?.email) {
+  const apolloPrimary =
+    contacts.find((c) => c.is_primary && c.email) ?? contacts.find((c) => c.email)
+  const businessEmail = (prospect.email as string | null) ?? null
+
+  let recipientEmail: string | null = null
+  let recipientContactId: string | null = null
+
+  if (apolloPrimary?.email) {
+    recipientEmail = apolloPrimary.email
+    recipientContactId = apolloPrimary.id
+  } else if (businessEmail) {
+    recipientEmail = businessEmail
+  }
+
+  if (!recipientEmail) {
     return NextResponse.json(
-      { error: 'No contact with a revealed email on this prospect. Reveal an email first.' },
+      { error: 'No email available for this prospect — no Apollo contact and no business email scraped from the website.' },
       { status: 400 }
     )
   }
@@ -61,11 +81,11 @@ export async function POST(
   const { data: unsub } = await supabaseAdmin
     .from('email_unsubs')
     .select('id')
-    .eq('contact_email', primary.email.toLowerCase())
+    .eq('contact_email', recipientEmail.toLowerCase())
     .maybeSingle()
   if (unsub) {
     return NextResponse.json(
-      { error: `${primary.email} has unsubscribed — cannot send.` },
+      { error: `${recipientEmail} has unsubscribed — cannot send.` },
       { status: 400 }
     )
   }
@@ -146,10 +166,10 @@ export async function POST(
     .from('sent_emails')
     .insert({
       pitch_id: pitchId,
-      contact_id: primary.id,
+      contact_id: recipientContactId,
       account_id: account.id,
       subject,
-      to_email: primary.email,
+      to_email: recipientEmail,
     })
     .select('id')
     .single()
@@ -157,12 +177,18 @@ export async function POST(
     return NextResponse.json({ error: `Failed to create send record: ${insErr?.message}` }, { status: 500 })
   }
 
+  // Unsub token: contact:UUID for Apollo-found contacts (legacy + identifiable),
+  // email:address for business-email recipients (no contact row to point at).
+  const unsubToken = recipientContactId
+    ? b64url(`contact:${recipientContactId}`)
+    : b64url(`email:${recipientEmail}`)
+
   const appOrigin = (process.env.NEXT_PUBLIC_APP_URL ?? request.nextUrl.origin).replace(/\/$/, '')
   const html = buildEmailHtml({
     bodyText,
     appOrigin,
     sentEmailId: sentRow.id,
-    unsubToken: b64url(primary.id),
+    unsubToken,
     signature: {
       sender_name: account.display_name,
       sender_title: account.sender_title,
@@ -176,7 +202,7 @@ export async function POST(
   try {
     const result = await sendMessage(accessToken, account.api_domain, account.zoho_account_id, {
       fromAddress: account.email,
-      toAddress: primary.email,
+      toAddress: recipientEmail,
       subject,
       htmlContent: html,
     })

@@ -22,6 +22,7 @@ interface Icp {
   require_instagram: boolean
   require_facebook: boolean
   require_business_phone: boolean
+  require_reachable: boolean
 }
 
 const EMPTY: Icp = {
@@ -37,6 +38,7 @@ const EMPTY: Icp = {
   require_instagram: false,
   require_facebook: false,
   require_business_phone: false,
+  require_reachable: false,
 }
 
 export default function IcpSettingsPage() {
@@ -193,8 +195,14 @@ export default function IcpSettingsPage() {
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               <ToggleRow
+                label="Require reachable (recommended)"
+                help="Prospect must have at least one usable contact path: an Apollo contact email, a website-scraped business email, OR a phone number. Replaces the older LinkedIn proxy — works for B2C too."
+                checked={icp.require_reachable}
+                onChange={(v) => setIcp({ ...icp, require_reachable: v })}
+              />
+              <ToggleRow
                 label="Require LinkedIn"
-                help="Business page OR at least one contact with a LinkedIn URL"
+                help="Business page OR at least one contact with a LinkedIn URL. B2B-only — turn this OFF for B2C-heavy ICPs and use 'Require reachable' instead."
                 checked={icp.require_linkedin}
                 onChange={(v) => setIcp({ ...icp, require_linkedin: v })}
               />

@@ -102,7 +102,8 @@ prospect-intel/
 │   ├── audit.ts                                      ← GMB + social + SerpApi + Groq summary
 │   ├── booking-platforms.ts                          ← 16-platform regex table + generic CTA
 │   ├── contacts.ts                                   ← Apollo: discoverPeople + revealEmail
-│   ├── enrich.ts                                     ← Cheerio → ScrapingBee render → AI Extract
+│   ├── enrich.ts                                     ← Cheerio → ScrapingBee render → AI Extract → business email discovery
+│   ├── email-discovery.ts                            ← extractEmailsFromHtml + pickBestEmail (vendor-domain filter, business-domain match, localpart ranking)
 │   ├── errors.ts                                     ← ExternalAPIError (provider-tagged)
 │   ├── llm/
 │   │   ├── anthropic.ts                              ← analyze + pitch + planner
@@ -136,7 +137,8 @@ prospect-intel/
 │   ├── 20260425140000_email_poll_state.sql           ← M24: last_poll_at, inbox_folder_id, replies unique index
 │   ├── 20260425160000_sender_signature.sql           ← post-M26: signature fields on email_accounts
 │   ├── 20260425180000_icp_social_and_filter.sql      ← post-M26: icp social toggles + prospects.filter_reason
-│   └── 20260425200000_self_open_and_planner_aware.sql ← post-M26: is_probably_self + known_self_ips
+│   ├── 20260425200000_self_open_and_planner_aware.sql ← post-M26: is_probably_self + known_self_ips
+│   └── 20260425220000_email_discovery.sql            ← M28: prospects.email_source/confidence + icp.require_reachable
 ├── .env.local.example                                ← all env keys, empty values
 ├── .mcp.json                                         ← Playwright MCP for local QA
 ├── vercel.json                                       ← cron schedule */2 * * * *
@@ -166,7 +168,7 @@ prospect-intel/
 Six core tables — see `supabase/migrations/20260420181100_init.sql` for the authoritative shape, and later migrations for additions.
 
 - **`batches`** — user-triggered search. Fields: user_id, city, category, count_requested, count_completed, status, pitch_score_threshold, auto_enrich_top_n
-- **`prospects`** — one per business. Fields: batch_id, name, address, phone, website, email, place_id (globally unique — used for cross-batch dedup), rating, review_count, hours_json, categories_text, status (new | enriched | analyzed | ready | contacted | replied | rejected | failed | **filtered_out**), **filter_reason** (human-readable reason when status='filtered_out')
+- **`prospects`** — one per business. Fields: batch_id, name, address, phone, website, email, **email_source** ('website_scrape' | 'apollo' | null), **email_confidence** ('verified' | 'guessed' | null), place_id (globally unique — used for cross-batch dedup), rating, review_count, hours_json, categories_text, status (new | enriched | analyzed | ready | contacted | replied | rejected | failed | filtered_out), filter_reason
 - **`enrichments`** — one per prospect. Fields: tech_stack_json, has_online_booking, has_ecommerce, has_chat, has_contact_form, is_mobile_friendly, ssl_valid, homepage_text_excerpt, scraped_data_json, fetch_error, fetched_at
 - **`analyses`** — Haiku output. Fields: pain_points_json, opportunity_score, best_angle, analyzed_at
 - **`contacts`** — one row per person. Fields: prospect_id, full_name, title, seniority, department, email, email_confidence, phone, linkedin_url, apollo_person_id, is_primary, email_revealed_at
@@ -181,7 +183,7 @@ Six core tables — see `supabase/migrations/20260420181100_init.sql` for the au
 - **`jobs`** — the simple queue. Fields: batch_id, prospect_id, job_type, status (pending | running | done | failed), attempts, last_error, created_at, processed_at
 
 Phase 4A added:
-- **`icp_profile`** — one per user. Services[], capacity, cities, rating/review floors, target_categories, plus optional hard filters: **require_linkedin, require_instagram, require_facebook, require_business_phone** (prospect missing a required signal gets `status='filtered_out'` at the audit-done boundary in cron)
+- **`icp_profile`** — one per user. Services[], capacity, cities, rating/review floors, target_categories, plus optional hard filters: **require_reachable** (any email or phone — recommended for B2C-friendly), require_linkedin, require_instagram, require_facebook, require_business_phone (prospect missing a required signal gets `status='filtered_out'` at the audit-done boundary in cron)
 - **`lead_plans`** — plan_date, rationale_json, status
 - **`lead_plan_items`** — priority, city, category, count, reasoning, batch_id (populated on execute)
 

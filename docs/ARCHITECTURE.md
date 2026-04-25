@@ -109,7 +109,7 @@ prospect-intel/
 │   │   ├── anthropic.ts                              ← analyze + pitch + planner
 │   │   └── groq.ts                                   ← bulk summarization only
 │   ├── pitch.ts                                      ← Sonnet: 4-sentence cold email, upsertable
-│   ├── places.ts                                     ← Google Places (New): Text Search + Details + filterDuplicatePlaces
+│   ├── places.ts                                     ← Google Places (New): Text Search + Details + filterDuplicatePlaces + filterByIcpFloors
 │   ├── plans.ts                                      ← planner (Opus) + executePlan + computeRecentPerformance
 │   ├── prompts.ts                                    ← SINGLE source of truth for prompt templates
 │   ├── recommend.ts                                  ← Sonnet: channel fit scores + phone script
@@ -138,7 +138,8 @@ prospect-intel/
 │   ├── 20260425160000_sender_signature.sql           ← post-M26: signature fields on email_accounts
 │   ├── 20260425180000_icp_social_and_filter.sql      ← post-M26: icp social toggles + prospects.filter_reason
 │   ├── 20260425200000_self_open_and_planner_aware.sql ← post-M26: is_probably_self + known_self_ips
-│   └── 20260425220000_email_discovery.sql            ← M28: prospects.email_source/confidence + icp.require_reachable
+│   ├── 20260425220000_email_discovery.sql            ← M28: prospects.email_source/confidence + icp.require_reachable
+│   └── 20260425230000_batch_filter_counts.sql        ← M29: batches.count_filtered_below_icp + count_duplicates_skipped
 ├── .env.local.example                                ← all env keys, empty values
 ├── .mcp.json                                         ← Playwright MCP for local QA
 ├── vercel.json                                       ← cron schedule */2 * * * *
@@ -167,7 +168,7 @@ prospect-intel/
 
 Six core tables — see `supabase/migrations/20260420181100_init.sql` for the authoritative shape, and later migrations for additions.
 
-- **`batches`** — user-triggered search. Fields: user_id, city, category, count_requested, count_completed, status, pitch_score_threshold, auto_enrich_top_n
+- **`batches`** — user-triggered search. Fields: user_id, city, category, count_requested, count_completed, status, pitch_score_threshold, auto_enrich_top_n, **count_filtered_below_icp** (places dropped at import for not meeting min_gmb_rating / min_review_count / business_status), **count_duplicates_skipped** (places already existing as prospects)
 - **`prospects`** — one per business. Fields: batch_id, name, address, phone, website, email, **email_source** ('website_scrape' | 'apollo' | null), **email_confidence** ('verified' | 'guessed' | null), place_id (globally unique — used for cross-batch dedup), rating, review_count, hours_json, categories_text, status (new | enriched | analyzed | ready | contacted | replied | rejected | failed | filtered_out), filter_reason
 - **`enrichments`** — one per prospect. Fields: tech_stack_json, has_online_booking, has_ecommerce, has_chat, has_contact_form, is_mobile_friendly, ssl_valid, homepage_text_excerpt, scraped_data_json, fetch_error, fetched_at
 - **`analyses`** — Haiku output. Fields: pain_points_json, opportunity_score, best_angle, analyzed_at

@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { plannerPrompt } from '@/lib/prompts'
 import { calendarForCategories } from '@/lib/seasonality'
-import { searchPlaces, filterDuplicatePlaces } from '@/lib/places'
+import { searchPlaces, filterDuplicatePlaces, filterByIcpFloors } from '@/lib/places'
 import { enqueueJob } from '@/lib/queue'
 
 if (!process.env.ANTHROPIC_API_KEY) {
@@ -318,10 +318,22 @@ export async function executePlanItem(itemId: string, userId: string): Promise<s
 }
 
 async function createBatchForPlanItem(userId: string, city: string, category: string, count: number): Promise<string> {
+  // Hard ICP floor filter (rating, reviews, business_status) — same enforcement
+  // as the manual /api/batches path. Plan-executed batches must obey ICP too.
+  const { data: icp } = await supabaseAdmin
+    .from('icp_profile')
+    .select('min_gmb_rating, min_review_count')
+    .eq('user_id', userId)
+    .maybeSingle()
+
   const places = await searchPlaces(category, city)
+  const { fresh: icpFresh, skipped: filteredBelowIcp } = filterByIcpFloors(places, {
+    min_gmb_rating: (icp as any)?.min_gmb_rating ?? null,
+    min_review_count: (icp as any)?.min_review_count ?? null,
+  })
   // Skip prospects already in the system (same place_id). The planner might
   // re-suggest med spas in Austin a second time — new leads only.
-  const { fresh } = await filterDuplicatePlaces(places)
+  const { fresh, skipped: duplicatesSkipped } = await filterDuplicatePlaces(icpFresh)
   const limited = fresh.slice(0, count)
 
   const { data: batch, error: batchErr } = await supabaseAdmin
@@ -332,6 +344,8 @@ async function createBatchForPlanItem(userId: string, city: string, category: st
       category,
       count_requested: count,
       status: limited.length > 0 ? 'processing' : 'done',
+      count_filtered_below_icp: filteredBelowIcp,
+      count_duplicates_skipped: duplicatesSkipped,
     })
     .select('id')
     .single()

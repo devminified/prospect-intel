@@ -25,6 +25,8 @@ interface Batch {
   category: string
   count_requested: number
   count_completed: number
+  count_filtered_below_icp: number
+  count_duplicates_skipped: number
   status: string
 }
 
@@ -45,7 +47,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
 
     const { data: b, error: bErr } = await supabase
       .from('batches')
-      .select('id, city, category, count_requested, count_completed, status')
+      .select('id, city, category, count_requested, count_completed, count_filtered_below_icp, count_duplicates_skipped, status')
       .eq('id', id)
       .single()
     if (bErr) {
@@ -134,6 +136,18 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
             <p className="text-sm text-muted-foreground mt-1">
               {batch.count_completed} of {batch.count_requested} completed · {batch.status}
             </p>
+            {(batch.count_filtered_below_icp > 0 || batch.count_duplicates_skipped > 0) && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Dropped at import:{' '}
+                {batch.count_filtered_below_icp > 0 && (
+                  <span><span className="font-medium text-foreground">{batch.count_filtered_below_icp}</span> below ICP floor</span>
+                )}
+                {batch.count_filtered_below_icp > 0 && batch.count_duplicates_skipped > 0 && ' · '}
+                {batch.count_duplicates_skipped > 0 && (
+                  <span><span className="font-medium text-foreground">{batch.count_duplicates_skipped}</span> already in your system</span>
+                )}
+              </p>
+            )}
           </div>
           <Button onClick={exportCsv}>Export approved CSV</Button>
         </div>

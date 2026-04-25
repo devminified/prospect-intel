@@ -129,3 +129,25 @@ Cron processor `checkSocialIcpGate` now respects `require_reachable`: prospect p
 ICP form gets the new toggle ranked first as the recommended option, with copy steering users away from `require_linkedin` toward `require_reachable` for B2C-friendly ICPs.
 
 Deferred: Hunter.io / Snov.io paid email lookup as a fallback when website scraping returns nothing. Skipped for now per user direction — measure organic coverage first.
+
+### M29 — Pre-batch ICP enforcement (rating / reviews / business_status)
+
+User-reported: even with min_gmb_rating + min_review_count set in ICP, leads coming back didn't match. Root cause: those values were passed to the planner as soft hints but never enforced — Google Places returned whatever it returned, including 3-star spots and businesses with single-digit review counts.
+
+Fix: hard pre-filter at batch creation, runs BEFORE inserting any prospect row. New `filterByIcpFloors()` helper in `lib/places.ts` drops anything matching ANY of:
+- `rating < icp.min_gmb_rating`
+- `rating == null` AND `min_gmb_rating` is set (unknown quality fails strict mode)
+- `user_ratings_total < icp.min_review_count`
+- `business_status !== 'OPERATIONAL'` (closed permanently or temporarily)
+
+Applied at both batch entry points: `POST /api/batches` (manual) and `lib/plans.ts::createBatchForPlanItem` (plan execute). Order: fetch from Places → ICP floor filter → duplicate filter → take top `count`.
+
+Migration `20260425230000_batch_filter_counts.sql` adds two columns to `batches`:
+- `count_filtered_below_icp int`
+- `count_duplicates_skipped int`
+
+Both persist on the row at create time so the batch detail UI can answer "why fewer prospects than I asked for?" weeks after the fact, not just in the create-response toast.
+
+Batch detail UI shows a sub-line under the progress count: "Dropped at import: N below ICP floor · M already in your system". Hidden when both counts are zero.
+
+Honest tradeoff: strict ICP + thin city supply = small batches. That's the correct behavior — better than silently importing junk that wastes enrich + analyze + audit + pitch budget. If supply is consistently too thin, next move would be Google Places pagination (3× more candidates per search) — not yet built, deferred until volume warrants.

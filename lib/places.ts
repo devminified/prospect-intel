@@ -131,6 +131,58 @@ function extractSnippet(body: string): string {
 }
 
 /**
+ * Hard ICP filter applied to raw Google Places results BEFORE inserting any
+ * prospect row. Drops anything that violates the user's quantitative ICP
+ * floors so we don't waste enrichment + analyze + audit + pitch budget on
+ * leads that can never satisfy their criteria.
+ *
+ *   - rating < min_gmb_rating              → drop
+ *   - rating == null AND min set           → drop (unknown quality fails strict)
+ *   - user_ratings_total < min_review_count → drop
+ *   - business_status !== 'OPERATIONAL'    → drop (closed permanently/temporarily)
+ *
+ * Returns the surviving set plus a count of how many were dropped so the
+ * caller can persist it on the batch row and explain low yields later.
+ */
+export interface IcpFloors {
+  min_gmb_rating: number | null
+  min_review_count: number | null
+}
+
+export function filterByIcpFloors(
+  places: PlaceSearchResult[],
+  floors: IcpFloors
+): { fresh: PlaceSearchResult[]; skipped: number } {
+  const minRating = floors.min_gmb_rating
+  const minReviews = floors.min_review_count
+
+  let skipped = 0
+  const fresh: PlaceSearchResult[] = []
+
+  for (const p of places) {
+    if (p.business_status && p.business_status !== 'OPERATIONAL') {
+      skipped++
+      continue
+    }
+    if (minRating != null) {
+      if (p.rating == null || p.rating < minRating) {
+        skipped++
+        continue
+      }
+    }
+    if (minReviews != null) {
+      if ((p.user_ratings_total ?? 0) < minReviews) {
+        skipped++
+        continue
+      }
+    }
+    fresh.push(p)
+  }
+
+  return { fresh, skipped }
+}
+
+/**
  * Given Google Places search results, filter out any place_id that already
  * exists as a prospect in the DB. Returns the fresh subset plus a count of
  * skipped duplicates so the caller can surface it to the user.

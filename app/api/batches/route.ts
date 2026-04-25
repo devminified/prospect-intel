@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
-import { searchPlaces, filterDuplicatePlaces } from '@/lib/places'
+import { searchPlaces, filterDuplicatePlaces, filterByIcpFloors } from '@/lib/places'
 import { enqueueJob } from '@/lib/queue'
 
 interface CreateBatchRequest {
@@ -76,13 +76,34 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Hard ICP filter: drop anything below the user's quality floor BEFORE
+    // we do anything else. No enrichment / analyze / audit budget gets spent
+    // on prospects that can't satisfy ICP.
+    const { data: icp } = await supabaseAdmin
+      .from('icp_profile')
+      .select('min_gmb_rating, min_review_count')
+      .eq('user_id', userId)
+      .maybeSingle()
+    const { fresh: icpFresh, skipped: filteredBelowIcp } = filterByIcpFloors(places, {
+      min_gmb_rating: (icp as any)?.min_gmb_rating ?? null,
+      min_review_count: (icp as any)?.min_review_count ?? null,
+    })
+
     // Skip prospects already in the system (same place_id). Avoids re-paying
     // Google Places + the full pipeline on leads the user has seen before.
-    const { fresh, skipped: duplicatesSkipped } = await filterDuplicatePlaces(places)
+    const { fresh, skipped: duplicatesSkipped } = await filterDuplicatePlaces(icpFresh)
     const limitedPlaces = fresh.slice(0, count)
 
+    // Persist the drop counts so the batch detail UI can surface them later.
+    await supabaseAdmin
+      .from('batches')
+      .update({
+        count_filtered_below_icp: filteredBelowIcp,
+        count_duplicates_skipped: duplicatesSkipped,
+      })
+      .eq('id', batch.id)
+
     if (limitedPlaces.length === 0) {
-      // Mark batch as done but with no results
       await supabaseAdmin
         .from('batches')
         .update({
@@ -91,12 +112,17 @@ export async function POST(request: NextRequest) {
         })
         .eq('id', batch.id)
 
+      const reasons: string[] = []
+      if (filteredBelowIcp > 0) reasons.push(`${filteredBelowIcp} below ICP floor`)
+      if (duplicatesSkipped > 0) reasons.push(`${duplicatesSkipped} duplicates`)
+      const tail = reasons.length ? ` (${reasons.join(', ')})` : ''
       return NextResponse.json({
         batch,
-        message: duplicatesSkipped > 0
-          ? `All ${places.length} matches already exist in your system.`
+        message: places.length > 0
+          ? `All ${places.length} matches were filtered out${tail}.`
           : 'No places found for the given criteria',
         prospects_created: 0,
+        prospects_filtered_below_icp: filteredBelowIcp,
         duplicates_skipped: duplicatesSkipped,
       })
     }
@@ -147,12 +173,16 @@ export async function POST(request: NextRequest) {
         .eq('id', batch.id)
     }
 
-    const dupMsg = duplicatesSkipped > 0 ? ` (${duplicatesSkipped} duplicates skipped)` : ''
+    const tailParts: string[] = []
+    if (filteredBelowIcp > 0) tailParts.push(`${filteredBelowIcp} filtered below ICP`)
+    if (duplicatesSkipped > 0) tailParts.push(`${duplicatesSkipped} duplicates skipped`)
+    const tail = tailParts.length ? ` (${tailParts.join(', ')})` : ''
     return NextResponse.json({
       batch,
       prospects_created: prospects.length,
+      prospects_filtered_below_icp: filteredBelowIcp,
       duplicates_skipped: duplicatesSkipped,
-      message: `Created ${prospects.length} prospects and queued enrichment jobs${dupMsg}`,
+      message: `Created ${prospects.length} prospects and queued enrichment jobs${tail}`,
     })
 
   } catch (error) {

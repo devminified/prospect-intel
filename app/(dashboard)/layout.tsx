@@ -27,6 +27,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       setUser(user)
       setLoading(false)
       if (!user) router.push('/login')
+      else void registerSelfIp()
+    }
+
+    // Capture this session's IP so the open-tracking pixel can flag opens
+    // that originate from the sender (e.g. browsing the Sent folder in Zoho)
+    // and exclude them from real-recipient open counts.
+    const registerSelfIp = async () => {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession()
+        const token = sessionData.session?.access_token
+        if (!token) return
+        await fetch('/api/auth/heartbeat', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        })
+      } catch {
+        // best-effort, ignore
+      }
     }
 
     getUser()

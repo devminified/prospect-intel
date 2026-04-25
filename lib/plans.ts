@@ -196,6 +196,10 @@ export async function generatePlan(userId: string): Promise<string> {
       min_gmb_rating: icp.min_gmb_rating,
       min_review_count: icp.min_review_count,
       target_categories: icp.target_categories,
+      require_linkedin: !!icp.require_linkedin,
+      require_instagram: !!icp.require_instagram,
+      require_facebook: !!icp.require_facebook,
+      require_business_phone: !!icp.require_business_phone,
     },
     seasonality: calendar,
     recent_batches: (recentBatches ?? []).map((b: any) => ({

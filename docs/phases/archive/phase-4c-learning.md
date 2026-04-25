@@ -72,3 +72,29 @@ Gate runs in `app/api/cron/process/route.ts::enqueueNext` at the audit-done → 
 UI: `/settings/icp` gets a "Hard filters" block with 4 toggle rows + help text. Prospect detail surfaces an amber callout under the header when `status='filtered_out'`, explaining the reason.
 
 Deliberately NOT added: Twitter/X, Threads, TikTok requirements (not useful for B2B SMB outreach). Multi-platform OR logic (kept AND-only for clarity).
+
+### Planner now learns about hard filters at plan time
+
+User-reported: planner kept picking categories where 100% of leads got filtered_out at the audit-done boundary, wasting Google Places + ScrapingBee + Anthropic on doomed batches.
+
+Fix: `plannerPrompt` now receives the four hard-filter booleans and gets explicit per-filter category guidance:
+- `require_linkedin: YES` → prefer B2B/professional-services (law firms, accounting, dental, agencies); avoid hyper-local B2C (restaurants, salons, single-location landscaping)
+- `require_instagram: YES` → prefer visual consumer categories; avoid dry B2B
+- `require_facebook: YES` → minimal restriction (most SMBs have FB)
+- `require_business_phone: YES` → virtually all Places have phones; minimal
+
+Multi-filter intersections narrow further (e.g. linkedin + instagram → med spas, full-service agencies; NOT restaurants). When the planner drops a normally-targeted category because of a filter clash, it must mention the dropped category in the rationale so the user understands why their default categories weren't picked.
+
+`lib/plans.ts::generatePlan` now passes `require_linkedin`, `require_instagram`, `require_facebook`, `require_business_phone` to the prompt.
+
+### Self-open detection (sender's own opens no longer inflate counts)
+
+User-reported: opening the Sent folder in Zoho fired the tracking pixel, counting as a recipient open and inflating real-open numbers.
+
+Fix: `email_opens.is_probably_self boolean` + `email_accounts.known_self_ips text[]`. Mechanism:
+- New route `POST /api/auth/heartbeat` captures the requester IP, prepends to `known_self_ips` for every email account this user owns (cap 10 most-recent, deduped).
+- `app/(dashboard)/layout.tsx` calls heartbeat once on mount inside the existing auth-resolution effect. Best-effort, fire-and-forget.
+- `/api/track/open/:sent_email_id` joins to `email_accounts` to read `known_self_ips`, sets `is_probably_self=true` if request IP matches.
+- Prospect detail open count now excludes BOTH `is_probably_mpp` AND `is_probably_self`. Both sub-counts surface separately for transparency: "5 opens (+2 likely MPP, +1 self)".
+
+This catches any opens that arrive from the user's known IPs — Sent folder views, browser previews, accidental self-opens. Recipient opens from real prospect IPs continue to count normally.

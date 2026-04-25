@@ -79,6 +79,7 @@ prospect-intel/
 │   │   ├── pitches/[id]/send/route.ts                ← POST: send via Zoho, log sent_emails
 │   │   ├── auth/zoho/authorize/route.ts              ← GET: start Zoho OAuth, set state cookie
 │   │   ├── auth/zoho/callback/route.ts               ← GET: exchange code, store tokens
+│   │   ├── auth/heartbeat/route.ts                   ← POST: capture sender IP for self-open filter
 │   │   ├── track/open/[id]/route.ts                  ← GET: 1x1 PNG + log email_opens
 │   │   ├── unsub/route.ts                            ← GET: public unsubscribe page
 │   │   ├── performance/route.ts                      ← GET: per-(category,city) reply aggregates
@@ -134,7 +135,8 @@ prospect-intel/
 │   ├── 20260425120000_email.sql                      ← M23: email_accounts, sent_emails, opens, replies, unsubs
 │   ├── 20260425140000_email_poll_state.sql           ← M24: last_poll_at, inbox_folder_id, replies unique index
 │   ├── 20260425160000_sender_signature.sql           ← post-M26: signature fields on email_accounts
-│   └── 20260425180000_icp_social_and_filter.sql      ← post-M26: icp social toggles + prospects.filter_reason
+│   ├── 20260425180000_icp_social_and_filter.sql      ← post-M26: icp social toggles + prospects.filter_reason
+│   └── 20260425200000_self_open_and_planner_aware.sql ← post-M26: is_probably_self + known_self_ips
 ├── .env.local.example                                ← all env keys, empty values
 ├── .mcp.json                                         ← Playwright MCP for local QA
 ├── vercel.json                                       ← cron schedule */2 * * * *
@@ -171,9 +173,9 @@ Six core tables — see `supabase/migrations/20260420181100_init.sql` for the au
 - **`visibility_audits`** — one per prospect. Fields: gmb_*, social_links_json, follower counts, serp_rank_main, serp_rank_brand, meta_ads_*, visibility_summary
 - **`pitches`** — Sonnet output. Fields: subject, body, edited_body, status (draft | approved | sent | replied), timestamps
 - **`channel_recommendations`** — on-demand, one per prospect. Fields: phone_fit_score, email_fit_score, recommended_channel (phone | email | either), reasoning, phone_script, generated_at
-- **`email_accounts`** — connected Zoho accounts (OAuth). Fields: user_id, email, display_name, zoho_account_id, api_domain, access_token, refresh_token, token_expires_at, daily_send_cap, sends_today, sends_reset_at, last_send_at, last_poll_at, inbox_folder_id, **sender_title, sender_company, calendly_url, website_url** (signature fields — rendered in every outbound pitch's signature block)
+- **`email_accounts`** — connected Zoho accounts (OAuth). Fields: user_id, email, display_name, zoho_account_id, api_domain, access_token, refresh_token, token_expires_at, daily_send_cap, sends_today, sends_reset_at, last_send_at, last_poll_at, inbox_folder_id, **sender_title, sender_company, calendly_url, website_url** (signature fields), **known_self_ips** (text[] — IPs captured via heartbeat to suppress sender-self opens)
 - **`sent_emails`** — one row per send. Fields: pitch_id, contact_id, account_id, message_id, thread_id, subject, body_html, to_email, bounced, bounce_reason, sent_at
-- **`email_opens`** — tracking-pixel hits. Fields: sent_email_id, opened_at, ip, user_agent, is_probably_mpp (true if hit <10s after send — likely Apple MPP or Gmail proxy, not a real read)
+- **`email_opens`** — tracking-pixel hits. Fields: sent_email_id, opened_at, ip, user_agent, is_probably_mpp (true if hit <10s after send — likely Apple MPP or Gmail proxy), is_probably_self (true if request IP matches one of the sender's `email_accounts.known_self_ips` — sender browsing Sent folder, not a real recipient open)
 - **`email_replies`** — matched reply messages. Fields: sent_email_id, received_at, snippet, classification (interested | not_interested | ooo | unsubscribe | question), raw_message_id (unique)
 - **`email_unsubs`** — global opt-out list. Fields: contact_email (unique), unsubscribed_at, reason
 - **`jobs`** — the simple queue. Fields: batch_id, prospect_id, job_type, status (pending | running | done | failed), attempts, last_error, created_at, processed_at

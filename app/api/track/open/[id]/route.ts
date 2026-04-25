@@ -23,7 +23,7 @@ export async function GET(
   try {
     const { data: sent } = await supabaseAdmin
       .from('sent_emails')
-      .select('id, sent_at')
+      .select('id, sent_at, account_id, email_accounts(known_self_ips)')
       .eq('id', id)
       .maybeSingle()
 
@@ -37,11 +37,20 @@ export async function GET(
         null
       const ua = _request.headers.get('user-agent') ?? null
 
+      // Self-open detection: if the requesting IP matches one we know
+      // belongs to the sender (captured via /api/auth/heartbeat from the
+      // dashboard), flag this open. The sender opening their own Sent folder
+      // should not pad the recipient open count.
+      const knownSelfIps: string[] =
+        ((sent as any).email_accounts?.known_self_ips as string[] | null | undefined) ?? []
+      const isProbablySelf = !!ip && knownSelfIps.includes(ip)
+
       await supabaseAdmin.from('email_opens').insert({
         sent_email_id: id,
         ip,
         user_agent: ua,
         is_probably_mpp: isProbablyMpp,
+        is_probably_self: isProbablySelf,
       })
     }
   } catch {

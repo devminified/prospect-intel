@@ -68,7 +68,7 @@ interface SentEmail {
   sent_at: string
   bounced: boolean
   bounce_reason: string | null
-  email_opens: Array<{ opened_at: string; is_probably_mpp: boolean }>
+  email_opens: Array<{ opened_at: string; is_probably_mpp: boolean; is_probably_self: boolean }>
   email_replies: Array<{ received_at: string | null; classification: string | null }>
 }
 
@@ -162,7 +162,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
     if (pitchId) {
       const { data: sent } = await supabase
         .from('sent_emails')
-        .select('id, to_email, sent_at, bounced, bounce_reason, email_opens(opened_at, is_probably_mpp), email_replies(received_at, classification)')
+        .select('id, to_email, sent_at, bounced, bounce_reason, email_opens(opened_at, is_probably_mpp, is_probably_self), email_replies(received_at, classification)')
         .eq('pitch_id', pitchId)
         .order('sent_at', { ascending: false })
         .limit(1)
@@ -360,8 +360,9 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
 
   const { prospect, enrichment, analysis, pitch, contacts, audit, recommendation, sentEmail } = detail
   const primaryContactEmail = contacts.find((c) => c.is_primary && c.email)?.email ?? contacts.find((c) => c.email)?.email ?? null
-  const realOpens = (sentEmail?.email_opens ?? []).filter((o) => !o.is_probably_mpp).length
+  const realOpens = (sentEmail?.email_opens ?? []).filter((o) => !o.is_probably_mpp && !o.is_probably_self).length
   const mppOpens = (sentEmail?.email_opens ?? []).filter((o) => o.is_probably_mpp).length
+  const selfOpens = (sentEmail?.email_opens ?? []).filter((o) => o.is_probably_self).length
   const replies = sentEmail?.email_replies ?? []
   const replyCount = replies.length
   const latestReply = replies[replies.length - 1] ?? null
@@ -609,8 +610,14 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                     <div className="flex items-center gap-4 text-muted-foreground flex-wrap">
                       <span>
                         <span className="font-semibold text-foreground">{realOpens}</span> opens
-                        {mppOpens > 0 && (
-                          <span className="ml-1 text-muted-foreground/70">(+{mppOpens} likely MPP)</span>
+                        {(mppOpens > 0 || selfOpens > 0) && (
+                          <span className="ml-1 text-muted-foreground/70">
+                            (
+                            {mppOpens > 0 ? `+${mppOpens} likely MPP` : ''}
+                            {mppOpens > 0 && selfOpens > 0 ? ', ' : ''}
+                            {selfOpens > 0 ? `+${selfOpens} self` : ''}
+                            )
+                          </span>
                         )}
                       </span>
                       <span>

@@ -109,6 +109,13 @@ export interface PlannerPromptInput {
     min_gmb_rating: number | null
     min_review_count: number | null
     target_categories: string[]
+    // Hard filters — prospects missing the required signal get filtered out
+    // at the audit-done boundary and never receive a pitch. Picking categories
+    // that systematically fail these means wasted Google Places + enrichment.
+    require_linkedin?: boolean
+    require_instagram?: boolean
+    require_facebook?: boolean
+    require_business_phone?: boolean
   }
   seasonality: Array<{
     category: string
@@ -168,6 +175,12 @@ AGENCY ICP
 - Minimum review count: ${icp.min_review_count ?? 'unspecified'}
 - Target categories pool: ${icp.target_categories.join(', ') || 'unspecified'}
 
+HARD FILTERS — prospects missing these get auto-filtered with NO pitch generated
+- require_linkedin:        ${icp.require_linkedin ? 'YES' : 'no'}
+- require_instagram:       ${icp.require_instagram ? 'YES' : 'no'}
+- require_facebook:        ${icp.require_facebook ? 'YES' : 'no'}
+- require_business_phone:  ${icp.require_business_phone ? 'YES' : 'no'}
+
 SEASONALITY FOR THIS MONTH
 ${i.seasonality.map((s) => `- ${s.category} [${s.in_peak ? 'IN PEAK' : 'off peak'}]: ${s.reason}`).join('\n') || '(no seasonality data for target categories)'}
 
@@ -186,6 +199,47 @@ RULES
 - Total of all item counts MUST be ≤ daily_capacity when daily_capacity > 0.
 - Avoid re-running the exact same (category, city) combination within 30 days unless seasonality strongly justifies it.
 - Each item needs a concrete reasoning string (1-2 sentences) that cites seasonality AND agency fit. Do not write generic "is a good category" reasoning.
+
+HARD-FILTER COMPATIBILITY (THIS IS CRITICAL — DO NOT IGNORE)
+The hard filters above run as a strict gate AFTER enrichment + audit. Picking a
+category that systematically fails a required filter means every prospect in
+that batch gets thrown away with zero pitches generated — pure waste of
+Google Places + ScrapingBee + Anthropic budget. Avoid this aggressively:
+
+- If require_linkedin is YES:
+  → PREFER B2B and professional-services categories where business or owner
+    LinkedIn presence is the norm: law firms, accounting firms, dental
+    practices, med spas, marketing agencies, IT consultancies, real estate
+    brokerages, financial advisors, architecture firms, commercial cleaning,
+    HVAC contractors (commercial), corporate trainers.
+  → AVOID hyper-local B2C categories where LinkedIn presence is rare or
+    absent: restaurants, food trucks, hair salons, nail salons, barbershops,
+    coffee shops, bakeries, pet groomers, single-location landscaping,
+    individual handymen, mom-and-pop retail.
+  → If a target_category is borderline (e.g. wedding planners), include only
+    if you cite the LinkedIn-presence expectation in the reasoning.
+
+- If require_instagram is YES:
+  → PREFER visually-driven consumer categories: med spas, restaurants,
+    fitness studios, yoga studios, salons, retail boutiques, photographers.
+  → AVOID dry B2B categories where IG is uncommon: law firms, accounting,
+    insurance brokers.
+
+- If require_facebook is YES:
+  → Most established local SMBs have a FB page; this is the lightest filter.
+    Still avoid pure-online or very-new businesses.
+
+- If require_business_phone is YES:
+  → Almost all Google Places listings include a phone — minimal additional
+    filter. No category-level avoidance needed.
+
+If MULTIPLE filters are YES simultaneously, the intersection narrows further.
+For example: require_linkedin + require_instagram together → med spas, law
+firms with marketing presence, agencies. NOT restaurants. NOT salons.
+
+When you drop a category from your plan because of these filters, mention it
+in the rationale so the user understands why their normally-targeted category
+wasn't picked today.
 
 OUTCOME-WEIGHTED RANKING (use OUTREACH PERFORMANCE above)
 - If a (category, city) has interested_rate ≥ 10% over ≥ 5 sent: RANK IT UP — this is a working combo, double down.

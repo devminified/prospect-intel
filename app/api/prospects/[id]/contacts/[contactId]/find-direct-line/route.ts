@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
-import { revealPhone } from '@/lib/contacts'
+import { findDirectLine } from '@/lib/contacts'
 
 export async function POST(
   request: NextRequest,
@@ -30,17 +30,16 @@ export async function POST(
   if ((contact as any).prospect_id !== prospectId) {
     return NextResponse.json({ error: 'Contact does not belong to this prospect' }, { status: 400 })
   }
-  const ownerId = (contact as any).prospects?.batches?.user_id
-  if (ownerId !== userId) {
+  if ((contact as any).prospects?.batches?.user_id !== userId) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
   try {
-    const result = await revealPhone(contactId)
-    return NextResponse.json({ ok: true, phone: result.phone, pending: result.pending })
+    const result = await findDirectLine(contactId)
+    return NextResponse.json({ ok: true, phone: result.phone })
   } catch (error: any) {
     return NextResponse.json(
-      { error: error?.message ?? 'Reveal phone failed' },
+      { error: error?.message ?? 'Find direct line failed' },
       { status: 500 }
     )
   }

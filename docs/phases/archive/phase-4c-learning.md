@@ -228,3 +228,45 @@ Word budget: 350–500 across all sections. Anti-cliché list expanded ("synergy
 `recommend.ts::callSonnet` `max_tokens` bumped 1024 → 4096 to fit the longer script + reasoning + scores without truncation.
 
 UI label changed "Phone opening script" → "Phone call script". Helper copy updated to set the right expectation ("Full call script — opening through close, plus objection handlers and a voicemail variant").
+
+### M34 — Phone reveal hybrid (Path C); rolled back Apollo phone
+
+User feedback after testing M31/M32: Apollo phone reveal stayed stuck on "Pending Apollo…" indefinitely. Webhook endpoint healthy (proven via curl returning 401 from outside), but Apollo never POSTed back — likely their data partner had no phone for the SMB contacts our ICP targets, and Apollo's silent-drop behavior on no-data leaves the contact in-flight forever.
+
+Honest reframe: Apollo's decision-maker phone reveal is built for B2B SaaS where the buyer has a direct line. For our ICP (med spas, dental, HVAC, restaurants — local SMBs), the **GMB business phone IS the call number**: the owner answers it themselves or a 1-person front desk routes you directly. Apollo was wrong tool for the job.
+
+**Path C — hybrid** (chosen over Path A drop-it-entirely or Path B swap-vendor-only):
+- **Default (free):** GMB business phone from Google Places, surfaced two ways:
+  - Prospect overview Phone row → `tel:` link, primary call number always visible.
+  - Contacts table → "Use business phone" button per row, copies `prospects.phone` into `contacts.phone` with `phone_source='gmb_business'`. No vendor call.
+- **Optional (paid):** Lusha v2/person — sync API, no webhook. Replaces Apollo for the rare B2B prospect where the GMB phone routes through a switchboard and you genuinely need a direct/mobile line. `phone_source='lusha_direct'`.
+
+Picked Lusha over Apollo for paid path because:
+- Sync request/response (kills the async-webhook fragility class entirely).
+- Better SMB-ish coverage in our segment.
+- Cheaper credits at the entry tier.
+- Existing free credits at signup let user evaluate before committing.
+
+**Migration `20260428000000_phone_source.sql`** adds `contacts.phone_source text`. Values: `gmb_business` | `lusha_direct` | `apollo_legacy` (existing rows from M31/M32, kept so provenance survives).
+
+**`lib/lusha.ts`** — small vendor client mirroring `lib/places.ts` pattern. `lushaFindPerson({firstName, lastName, domain, linkedinUrl})` POSTs `v2/person`. Prefers LinkedIn match when available, falls back to firstName+lastName+domain. `bestPhone(phones)` picks mobile/cell > direct dial > anything else. `lushaConfigured()` is a thin env check the UI/API can use to gracefully degrade when the user hasn't onboarded Lusha yet.
+
+**`lib/contacts.ts`** — `useBusinessPhone(contactId)` (free, copies prospect.phone into contact) and `findDirectLine(contactId)` (Lusha-backed, paid). The legacy `revealPhone` and Apollo phone-reveal helpers were removed entirely; `apolloPeopleMatch` reverted to email-only.
+
+**Routes:**
+- `POST /api/prospects/:id/contacts/:contactId/use-business-phone`
+- `POST /api/prospects/:id/contacts/:contactId/find-direct-line`
+- Removed: `POST /api/prospects/:id/contacts/:contactId/reveal-phone`
+- Removed: `POST /api/webhooks/apollo/phone-reveal`
+
+**UI:**
+- Prospect overview Phone row is now a `tel:` link.
+- Contacts table Phone column three states:
+  - revealed → number with `business` (gray) or `direct` (green) badge depending on `phone_source`.
+  - tried via Lusha but no direct line → "no direct line".
+  - never tried → two buttons: "Use business phone" (free, only shown when `prospects.phone` exists) and "Find direct line" (Lusha, paid).
+- Apollo "Reveal phone" button + Pending-Apollo state + Refresh button all removed.
+
+**Env:** `LUSHA_API_KEY` added (optional). `APOLLO_WEBHOOK_SECRET` and `NEXT_PUBLIC_APP_URL` are no longer required for phone reveal (`NEXT_PUBLIC_APP_URL` still used by tracking pixel + unsub URLs).
+
+Migration columns `phone_revealed_at` (M31) and `phone_request_id` (M32) are KEPT — can't undo migrations cleanly, and `phone_revealed_at` is reused as the audit timestamp for both `useBusinessPhone` and `findDirectLine`. `phone_request_id` is now legacy-only and never written by new code.

@@ -33,8 +33,7 @@ interface Contact {
   email: string | null
   email_confidence: string | null
   phone: string | null
-  phone_revealed_at: string | null
-  phone_request_id: string | null
+  phone_source: string | null
   linkedin_url: string | null
   is_primary: boolean
 }
@@ -136,7 +135,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   const [copiedAt, setCopiedAt] = useState<string | null>(null)
   const [discovering, setDiscovering] = useState(false)
   const [revealingId, setRevealingId] = useState<string | null>(null)
-  const [revealingPhoneId, setRevealingPhoneId] = useState<string | null>(null)
+  const [phoneActionId, setPhoneActionId] = useState<string | null>(null)
   const [regenerating, setRegenerating] = useState(false)
   const [recommending, setRecommending] = useState(false)
   const [scriptCopiedAt, setScriptCopiedAt] = useState<string | null>(null)
@@ -155,7 +154,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       supabase.from('enrichments').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('analyses').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('pitches').select('id, subject, body, edited_body, status').eq('prospect_id', id).maybeSingle(),
-      supabase.from('contacts').select('id, full_name, title, seniority, department, email, email_confidence, phone, phone_revealed_at, phone_request_id, linkedin_url, is_primary').eq('prospect_id', id),
+      supabase.from('contacts').select('id, full_name, title, seniority, department, email, email_confidence, phone, phone_source, linkedin_url, is_primary').eq('prospect_id', id),
       supabase.from('visibility_audits').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('channel_recommendations').select('phone_fit_score, email_fit_score, recommended_channel, reasoning, phone_script, generated_at').eq('prospect_id', id).maybeSingle(),
     ])
@@ -304,22 +303,40 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
     }
   }
 
-  async function revealPhoneAction(contactId: string) {
-    if (!confirm('Spend 1 Apollo phone credit to reveal this number? Apollo looks up phones asynchronously — the number usually arrives within a few minutes via webhook.')) return
-    setRevealingPhoneId(contactId)
+  async function useBusinessPhoneAction(contactId: string) {
+    setPhoneActionId(contactId)
     setError('')
     try {
       const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/contacts/${contactId}/reveal-phone`, { method: 'POST', headers })
+      const res = await fetch(`/api/prospects/${id}/contacts/${contactId}/use-business-phone`, { method: 'POST', headers })
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'reveal phone failed' }))
-        throw new Error(err.error ?? 'reveal phone failed')
+        const err = await res.json().catch(() => ({ error: 'use business phone failed' }))
+        throw new Error(err.error ?? 'use business phone failed')
       }
       await load()
     } catch (e: any) {
       setError(e.message)
     } finally {
-      setRevealingPhoneId(null)
+      setPhoneActionId(null)
+    }
+  }
+
+  async function findDirectLineAction(contactId: string) {
+    if (!confirm('Spend 1 Lusha credit to find a direct/mobile line for this contact? For SMB prospects the business phone above is usually the right number — only do this if you genuinely need the decision-maker direct.')) return
+    setPhoneActionId(contactId)
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/prospects/${id}/contacts/${contactId}/find-direct-line`, { method: 'POST', headers })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'find direct line failed' }))
+        throw new Error(err.error ?? 'find direct line failed')
+      }
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setPhoneActionId(null)
     }
   }
 
@@ -451,7 +468,15 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                   <span className="text-muted-foreground">—</span>
                 )}
               </Row>
-              <Row label="Phone">{prospect.phone ?? <span className="text-muted-foreground">—</span>}</Row>
+              <Row label="Phone">
+                {prospect.phone ? (
+                  <a href={`tel:${prospect.phone}`} className="text-primary hover:underline font-medium">
+                    {prospect.phone}
+                  </a>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </Row>
               <Row label="Rating">
                 {prospect.rating != null ? `${prospect.rating} (${prospect.review_count ?? 0} reviews)` : <span className="text-muted-foreground">—</span>}
               </Row>
@@ -894,43 +919,44 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                       </td>
                       <td className="py-2 pr-4">
                         {c.phone ? (
-                          <a href={`tel:${c.phone}`} className="text-primary hover:underline">
-                            {c.phone}
-                          </a>
-                        ) : c.phone_request_id && !c.phone_revealed_at ? (
                           <span className="flex items-center gap-2">
-                            <span
-                              className="text-xs text-muted-foreground"
-                              title="Apollo is looking up this number async — usually arrives within minutes"
-                            >
-                              Pending Apollo…
-                            </span>
+                            <a href={`tel:${c.phone}`} className="text-primary hover:underline">
+                              {c.phone}
+                            </a>
+                            {c.phone_source === 'gmb_business' && (
+                              <span className="text-xs text-muted-foreground" title="Copied from Google business listing">business</span>
+                            )}
+                            {c.phone_source === 'lusha_direct' && (
+                              <span className="text-xs text-green-700 font-semibold" title="Direct/mobile line revealed via Lusha">direct</span>
+                            )}
+                          </span>
+                        ) : c.phone_source === 'lusha_direct' ? (
+                          <span className="text-xs text-muted-foreground" title="Lusha had no direct line for this contact">
+                            no direct line
+                          </span>
+                        ) : c.full_name && c.id ? (
+                          <span className="flex flex-wrap items-center gap-2">
+                            {prospect?.phone && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => useBusinessPhoneAction(c.id)}
+                                disabled={phoneActionId === c.id}
+                                title="Free — uses the business phone from the Google listing"
+                              >
+                                {phoneActionId === c.id ? 'Saving…' : 'Use business phone'}
+                              </Button>
+                            )}
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => load()}
-                              title="Refresh"
+                              onClick={() => findDirectLineAction(c.id)}
+                              disabled={phoneActionId === c.id}
+                              title="Spends 1 Lusha credit — only useful for B2B where the GMB phone routes through a switchboard"
                             >
-                              Refresh
+                              Find direct line
                             </Button>
                           </span>
-                        ) : c.phone_revealed_at ? (
-                          <span
-                            className="text-xs text-muted-foreground"
-                            title="Apollo had no phone for this contact"
-                          >
-                            none on file
-                          </span>
-                        ) : c.full_name && c.id ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => revealPhoneAction(c.id)}
-                            disabled={revealingPhoneId === c.id}
-                            title="Spends 1 Apollo phone credit (separate pool from email credits)"
-                          >
-                            {revealingPhoneId === c.id ? 'Revealing…' : 'Reveal phone'}
-                          </Button>
                         ) : (
                           <span className="text-muted-foreground">—</span>
                         )}

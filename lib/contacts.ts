@@ -191,15 +191,21 @@ export async function revealEmail(contactId: string): Promise<{ email: string | 
  * Spend one Apollo phone credit to reveal the direct/mobile phone for a single
  * already-discovered contact. Phone credits are billed separately from email
  * credits and are typically more expensive — only call when the user has
- * explicitly opted in (e.g. clicked "Reveal phone" on the contact row).
+ * explicitly opted in.
  *
- * If Apollo has no phone on file, we still stamp `phone_revealed_at` so we
- * don't keep retrying and burning another credit on the same dead end.
+ * Apollo's phone reveal is asynchronous: they queue a third-party lookup and
+ * POST the result to our webhook_url when it lands (seconds to minutes later).
+ * Synchronous response cases:
+ *   - phone present in response  → already cached on Apollo's side; persist now.
+ *   - request_id only            → store as in-flight; webhook will complete it.
+ *   - neither                    → Apollo had nothing usable; mark tried.
  */
-export async function revealPhone(contactId: string): Promise<{ phone: string | null }> {
+export async function revealPhone(
+  contactId: string
+): Promise<{ phone: string | null; pending: boolean }> {
   const { data: contact, error: cErr } = await supabaseAdmin
     .from('contacts')
-    .select('id, apollo_person_id, phone, phone_revealed_at')
+    .select('id, apollo_person_id, phone, phone_revealed_at, phone_request_id')
     .eq('id', contactId)
     .single()
 
@@ -210,28 +216,63 @@ export async function revealPhone(contactId: string): Promise<{ phone: string | 
     throw new Error('Contact has no Apollo person id — cannot reveal phone')
   }
   if (contact.phone && contact.phone_revealed_at) {
-    return { phone: contact.phone }
+    return { phone: contact.phone, pending: false }
+  }
+  if ((contact as any).phone_request_id && !contact.phone_revealed_at) {
+    // Already in flight — refuse to re-charge a credit on a duplicate click.
+    return { phone: null, pending: true }
   }
 
-  const result = await apolloPeopleMatch(contact.apollo_person_id, { revealPhone: true })
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL
+  const secret = process.env.APOLLO_WEBHOOK_SECRET
+  if (!baseUrl || !secret) {
+    throw new Error(
+      'Phone reveal not configured: set NEXT_PUBLIC_APP_URL + APOLLO_WEBHOOK_SECRET in env'
+    )
+  }
+  const webhookUrl = `${baseUrl.replace(/\/$/, '')}/api/webhooks/apollo/phone-reveal?secret=${encodeURIComponent(secret)}`
+
+  const result = await apolloPeopleMatch(contact.apollo_person_id, {
+    revealPhone: true,
+    webhookUrl,
+  })
   if (!result) {
     throw new Error('Apollo returned no match for this contact')
   }
 
-  const update: { phone?: string | null; phone_revealed_at: string } = {
-    phone_revealed_at: new Date().toISOString(),
+  // Cached path: Apollo had the phone on hand.
+  if (result.phone) {
+    const { error: updateErr } = await supabaseAdmin
+      .from('contacts')
+      .update({
+        phone: result.phone,
+        phone_revealed_at: new Date().toISOString(),
+      })
+      .eq('id', contactId)
+    if (updateErr) {
+      throw new Error(`Failed to persist revealed phone: ${updateErr.message}`)
+    }
+    return { phone: result.phone, pending: false }
   }
-  if (result.phone) update.phone = result.phone
 
-  const { error: updateErr } = await supabaseAdmin
+  // Async path: store request_id; webhook will fill in the phone when ready.
+  if (result.request_id) {
+    const { error: updateErr } = await supabaseAdmin
+      .from('contacts')
+      .update({ phone_request_id: result.request_id })
+      .eq('id', contactId)
+    if (updateErr) {
+      throw new Error(`Failed to persist phone request_id: ${updateErr.message}`)
+    }
+    return { phone: null, pending: true }
+  }
+
+  // Apollo accepted but had no phone — mark tried so we don't retry.
+  await supabaseAdmin
     .from('contacts')
-    .update(update)
+    .update({ phone_revealed_at: new Date().toISOString() })
     .eq('id', contactId)
-  if (updateErr) {
-    throw new Error(`Failed to persist revealed phone: ${updateErr.message}`)
-  }
-
-  return { phone: result.phone ?? null }
+  return { phone: null, pending: false }
 }
 
 async function apolloPeopleSearch(domain: string): Promise<ApolloPerson[]> {
@@ -265,12 +306,25 @@ interface ApolloMatchResult {
   email?: string | null
   email_status?: string
   phone?: string | null
+  request_id?: string | null
 }
 
 async function apolloPeopleMatch(
   personId: string,
-  opts?: { revealPhone?: boolean }
+  opts?: { revealPhone?: boolean; webhookUrl?: string }
 ): Promise<ApolloMatchResult | null> {
+  const body: Record<string, unknown> = {
+    id: personId,
+    reveal_personal_emails: false,
+    reveal_phone_number: !!opts?.revealPhone,
+  }
+  // Apollo's phone reveal is async — they queue a third-party lookup and POST
+  // the result to webhook_url when it lands. Required when reveal_phone_number
+  // is true; without it Apollo 400s.
+  if (opts?.revealPhone && opts?.webhookUrl) {
+    body.webhook_url = opts.webhookUrl
+  }
+
   const res = await fetch(`${APOLLO_BASE}/people/match`, {
     method: 'POST',
     headers: {
@@ -278,16 +332,12 @@ async function apolloPeopleMatch(
       'Cache-Control': 'no-cache',
       'X-Api-Key': API_KEY,
     },
-    body: JSON.stringify({
-      id: personId,
-      reveal_personal_emails: false,
-      reveal_phone_number: !!opts?.revealPhone,
-    }),
+    body: JSON.stringify(body),
   })
 
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new ExternalAPIError(PROVIDER, `peopleMatch failed: ${extractSnippet(body)}`, res.status)
+    const errBody = await res.text().catch(() => '')
+    throw new ExternalAPIError(PROVIDER, `peopleMatch failed: ${extractSnippet(errBody)}`, res.status)
   }
   const data = await res.json()
   const person = data?.person
@@ -296,6 +346,8 @@ async function apolloPeopleMatch(
     email: person.email ?? null,
     email_status: person.email_status,
     phone: person.phone_number ?? null,
+    // Apollo returns request_id on the top-level response when reveal_phone_number is async.
+    request_id: data?.request_id ?? person.request_id ?? null,
   }
 }
 

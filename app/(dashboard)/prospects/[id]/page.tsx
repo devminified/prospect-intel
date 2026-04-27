@@ -34,6 +34,7 @@ interface Contact {
   email_confidence: string | null
   phone: string | null
   phone_revealed_at: string | null
+  phone_request_id: string | null
   linkedin_url: string | null
   is_primary: boolean
 }
@@ -154,7 +155,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       supabase.from('enrichments').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('analyses').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('pitches').select('id, subject, body, edited_body, status').eq('prospect_id', id).maybeSingle(),
-      supabase.from('contacts').select('id, full_name, title, seniority, department, email, email_confidence, phone, phone_revealed_at, linkedin_url, is_primary').eq('prospect_id', id),
+      supabase.from('contacts').select('id, full_name, title, seniority, department, email, email_confidence, phone, phone_revealed_at, phone_request_id, linkedin_url, is_primary').eq('prospect_id', id),
       supabase.from('visibility_audits').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('channel_recommendations').select('phone_fit_score, email_fit_score, recommended_channel, reasoning, phone_script, generated_at').eq('prospect_id', id).maybeSingle(),
     ])
@@ -304,7 +305,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   }
 
   async function revealPhoneAction(contactId: string) {
-    if (!confirm('Spend 1 Apollo phone credit to reveal this number? Phone credits are billed separately from email credits.')) return
+    if (!confirm('Spend 1 Apollo phone credit to reveal this number? Apollo looks up phones asynchronously — the number usually arrives within a few minutes via webhook.')) return
     setRevealingPhoneId(contactId)
     setError('')
     try {
@@ -896,6 +897,23 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                           <a href={`tel:${c.phone}`} className="text-primary hover:underline">
                             {c.phone}
                           </a>
+                        ) : c.phone_request_id && !c.phone_revealed_at ? (
+                          <span className="flex items-center gap-2">
+                            <span
+                              className="text-xs text-muted-foreground"
+                              title="Apollo is looking up this number async — usually arrives within minutes"
+                            >
+                              Pending Apollo…
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => load()}
+                              title="Refresh"
+                            >
+                              Refresh
+                            </Button>
+                          </span>
                         ) : c.phone_revealed_at ? (
                           <span
                             className="text-xs text-muted-foreground"

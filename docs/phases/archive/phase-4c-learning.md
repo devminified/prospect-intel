@@ -187,3 +187,25 @@ Apollo bills email and phone reveals as separate credit pools. Phone is typicall
 - **UI** — prospect detail contacts table gains a "Phone" column. Three states per row: phone present (shown as `tel:` link), `phone_revealed_at` non-null but no phone (shows "none on file"), or neither (shows "Reveal phone" button with confirm dialog explaining the separate credit).
 
 Why a `confirm()` dialog: phone credits cost meaningfully more than email credits in Apollo's pricing tiers. A double-tap safeguard prevents accidental clicks from burning the more expensive credit pool.
+
+### M32 — Apollo phone reveal is async (webhook architecture)
+
+M31 shipped synchronous, then on first click hit `HTTP 400: Please add a valid 'webhook_url' parameter when using 'reveal_phone_number'`. Apollo's phone reveal isn't synchronous — they queue a third-party data lookup and POST the phone to a webhook when it lands (seconds to minutes later).
+
+- **Migration `20260427010000_phone_request_id.sql`** — adds `contacts.phone_request_id text` plus a partial index where `phone_request_id is not null`. The webhook needs an indexed key to locate the contact when the phone arrives.
+- **State machine on `contacts`:**
+  - never tried: `phone_request_id is null AND phone_revealed_at is null`
+  - in flight: `phone_request_id is not null AND phone_revealed_at is null`
+  - tried, no phone: `phone_revealed_at is not null AND phone is null`
+  - tried, got phone: `phone_revealed_at is not null AND phone is not null`
+- **`apolloPeopleMatch`** now accepts `opts.webhookUrl`. When `revealPhone: true`, the webhook URL is included in the request body (Apollo 400s without it).
+- **`revealPhone(contactId)`** semantics changed:
+  - Cached path (Apollo had the phone on hand) → write phone + `phone_revealed_at` synchronously, return `{ phone, pending: false }`.
+  - Async path (Apollo accepted, looking up) → store `phone_request_id`, return `{ phone: null, pending: true }`.
+  - No-data path → stamp `phone_revealed_at` only, return `{ phone: null, pending: false }`.
+  - Re-click guard: if a prior request is in flight, return `{ pending: true }` without re-charging a credit.
+- **New webhook** `POST /api/webhooks/apollo/phone-reveal?secret=…` — secret-gated via `APOLLO_WEBHOOK_SECRET`. Permissively reads `request_id` and the phone field (`phone_number` / `phone` / `sanitized_phone` / `mobile_phone` / `person.phone_number` / `person.phone`) since Apollo's webhook payload shape isn't stably documented. Updates `contacts` by `phone_request_id`. Returns 200 on no-match (already-handled / stale request_id) so Apollo doesn't retry-storm.
+- **UI** — third state on the Phone column: when `phone_request_id` is set but `phone_revealed_at` isn't, shows "Pending Apollo…" with a shadcn ghost-variant Refresh button that calls `load()` again.
+- **New env vars** — `APOLLO_WEBHOOK_SECRET` (in addition to existing `NEXT_PUBLIC_APP_URL`). Both must be set in Vercel before phone reveal works in production.
+
+Reachability: webhook only works in deployed environments (localhost is unreachable from Apollo). To test in dev, use `cloudflared tunnel` or `ngrok` and override `NEXT_PUBLIC_APP_URL` locally.

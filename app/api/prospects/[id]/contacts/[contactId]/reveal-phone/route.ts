@@ -37,7 +37,7 @@ export async function POST(
 
   try {
     const result = await revealPhone(contactId)
-    return NextResponse.json({ ok: true, phone: result.phone })
+    return NextResponse.json({ ok: true, phone: result.phone, pending: result.pending })
   } catch (error: any) {
     return NextResponse.json(
       { error: error?.message ?? 'Reveal phone failed' },

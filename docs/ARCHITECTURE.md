@@ -140,7 +140,8 @@ prospect-intel/
 │   ├── 20260425200000_self_open_and_planner_aware.sql ← post-M26: is_probably_self + known_self_ips
 │   ├── 20260425220000_email_discovery.sql            ← M28: prospects.email_source/confidence + icp.require_reachable
 │   ├── 20260425230000_batch_filter_counts.sql        ← M29: batches.count_filtered_below_icp + count_duplicates_skipped
-│   └── 20260427000000_phone_reveal.sql               ← M31: contacts.phone_revealed_at audit timestamp for Apollo phone reveals
+│   ├── 20260427000000_phone_reveal.sql               ← M31: contacts.phone_revealed_at audit timestamp for Apollo phone reveals
+│   └── 20260427010000_phone_request_id.sql           ← M32: contacts.phone_request_id (Apollo async webhook lookup key)
 ├── .env.local.example                                ← all env keys, empty values
 ├── .mcp.json                                         ← Playwright MCP for local QA
 ├── vercel.json                                       ← cron schedule */2 * * * *

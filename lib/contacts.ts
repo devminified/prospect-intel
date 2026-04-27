@@ -252,11 +252,12 @@ export async function findDirectLine(
 
   const { data: prospect } = await supabaseAdmin
     .from('prospects')
-    .select('website')
+    .select('website, name')
     .eq('id', contact.prospect_id)
     .single()
 
   const domain = extractDomain((prospect as any)?.website ?? null)
+  const companyName = ((prospect as any)?.name ?? null) as string | null
   const fullName = (contact as any).full_name as string | null
   const parts = fullName ? fullName.trim().split(/\s+/) : []
   const firstName = parts[0] ?? null
@@ -266,6 +267,7 @@ export async function findDirectLine(
     firstName,
     lastName,
     domain,
+    companyName,
     linkedinUrl: (contact as any).linkedin_url ?? null,
   })
   if (!result) {

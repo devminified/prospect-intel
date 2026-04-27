@@ -23,14 +23,20 @@ export function lushaConfigured(): boolean {
  * Sync API — no webhooks, no async credits-stuck-in-flight failure mode like
  * Apollo. One request, one response, credit charged on success.
  *
- * Lusha matches against (firstName + lastName + companyDomain) OR linkedinUrl.
- * Domain match is the more reliable path for SMB targets where decision-makers
- * may not have public LinkedIn profiles.
+ * Match path priority:
+ *   1. linkedinUrl alone (most reliable when present)
+ *   2. firstName + lastName + companies[].domain
+ *   3. firstName + lastName + companies[].name (fallback when website missing)
+ *
+ * For our SMB ICP, path 3 is the common case — many local businesses don't
+ * have a publicly-discoverable website domain in Apollo's data, but we always
+ * have the business name from Google Places.
  */
 export async function lushaFindPerson(input: {
   firstName: string | null
   lastName: string | null
   domain: string | null
+  companyName: string | null
   linkedinUrl: string | null
 }): Promise<LushaPersonResult | null> {
   const apiKey = process.env.LUSHA_API_KEY
@@ -40,20 +46,26 @@ export async function lushaFindPerson(input: {
     )
   }
 
-  // Build the smallest possible match payload Lusha accepts. Prefer the
-  // LinkedIn path when we have it; fall back to firstName+lastName+domain.
   const body: Record<string, unknown> = {}
   if (input.linkedinUrl) {
     body.linkedinUrl = input.linkedinUrl
-  } else {
-    if (!input.firstName || !input.lastName || !input.domain) {
-      throw new Error(
-        'Lusha needs either linkedinUrl OR (firstName + lastName + domain) — contact lacks all three'
-      )
-    }
+  } else if (input.firstName && input.lastName && input.domain) {
     body.firstName = input.firstName
     body.lastName = input.lastName
     body.companies = [{ domain: input.domain }]
+  } else if (input.firstName && input.lastName && input.companyName) {
+    body.firstName = input.firstName
+    body.lastName = input.lastName
+    body.companies = [{ name: input.companyName }]
+  } else {
+    const missing: string[] = []
+    if (!input.linkedinUrl) missing.push('linkedinUrl')
+    if (!input.firstName) missing.push('firstName')
+    if (!input.lastName) missing.push('lastName')
+    if (!input.domain && !input.companyName) missing.push('domain or companyName')
+    throw new Error(
+      `Lusha can't match this contact — needs LinkedIn URL OR (firstName + lastName + domain/companyName). Missing: ${missing.join(', ')}.`
+    )
   }
 
   const res = await fetch(`${LUSHA_BASE}/v2/person`, {

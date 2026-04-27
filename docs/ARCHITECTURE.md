@@ -109,7 +109,7 @@ prospect-intel/
 │   │   ├── anthropic.ts                              ← analyze + pitch + planner
 │   │   └── groq.ts                                   ← bulk summarization only
 │   ├── pitch.ts                                      ← Sonnet: 4-sentence cold email, upsertable
-│   ├── places.ts                                     ← Google Places (New): Text Search + Details + filterDuplicatePlaces + filterByIcpFloors
+│   ├── places.ts                                     ← Google Places (New): Text Search (paginates to 60 via nextPageToken, over-fetches 2×) + Details + filterDuplicatePlaces + filterByIcpFloors (rating / reviews / business_status / require_phone)
 │   ├── plans.ts                                      ← planner (Opus) + executePlan + computeRecentPerformance
 │   ├── prompts.ts                                    ← SINGLE source of truth for prompt templates
 │   ├── recommend.ts                                  ← Sonnet: channel fit scores + phone script

@@ -20,7 +20,11 @@ const TEXT_SEARCH_FIELDS = [
   'places.regularOpeningHours',
   'places.types',
   'places.location',
+  'nextPageToken',
 ].join(',')
+
+const PLACES_PAGE_SIZE = 20
+const PLACES_MAX_PAGES = 3 // Google Places (New) hard ceiling: 60 total results
 
 const DETAIL_FIELDS = [
   'id',
@@ -54,32 +58,63 @@ export interface PlaceDetails extends PlaceSearchResult {
   formatted_phone_number?: string
 }
 
+/**
+ * Search Google Places for a category in a city.
+ *
+ * Over-fetches ~2× the requested count (capped at 60, the Places New hard
+ * ceiling) so that downstream ICP/dedup/social filters still leave us at or
+ * near the user's target count of active prospects.
+ *
+ * Pagination uses the `pageToken` field on Places (New). Stops as soon as we
+ * have enough candidates OR run out of pages.
+ */
 export async function searchPlaces(
   category: string,
-  city: string
+  city: string,
+  desiredCount: number = PLACES_PAGE_SIZE
 ): Promise<PlaceSearchResult[]> {
-  const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Goog-Api-Key': API_KEY,
-      'X-Goog-FieldMask': TEXT_SEARCH_FIELDS,
-    },
-    body: JSON.stringify({
-      textQuery: `${category} in ${city}`,
-      pageSize: 20,
-    }),
-  })
+  const target = Math.min(
+    Math.max(desiredCount * 2, PLACES_PAGE_SIZE),
+    PLACES_PAGE_SIZE * PLACES_MAX_PAGES
+  )
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    const snippet = extractSnippet(body)
-    throw new ExternalAPIError(PROVIDER, `textSearch failed: ${snippet}`, response.status)
+  const all: PlaceSearchResult[] = []
+  let pageToken: string | undefined
+
+  for (let page = 0; page < PLACES_MAX_PAGES; page++) {
+    const body: Record<string, unknown> = {
+      textQuery: `${category} in ${city}`,
+      pageSize: PLACES_PAGE_SIZE,
+    }
+    if (pageToken) body.pageToken = pageToken
+
+    const response = await fetch('https://places.googleapis.com/v1/places:searchText', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': API_KEY,
+        'X-Goog-FieldMask': TEXT_SEARCH_FIELDS,
+      },
+      body: JSON.stringify(body),
+    })
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '')
+      const snippet = extractSnippet(errBody)
+      throw new ExternalAPIError(PROVIDER, `textSearch failed: ${snippet}`, response.status)
+    }
+
+    const data = await response.json()
+    const places = Array.isArray(data?.places) ? data.places : []
+    for (const p of places) all.push(mapPlace(p))
+
+    if (all.length >= target) break
+
+    pageToken = typeof data?.nextPageToken === 'string' ? data.nextPageToken : undefined
+    if (!pageToken) break
   }
 
-  const data = await response.json()
-  const places = Array.isArray(data?.places) ? data.places : []
-  return places.map(mapPlace)
+  return all
 }
 
 export async function getPlaceDetails(placeId: string): Promise<PlaceDetails | null> {
@@ -140,6 +175,8 @@ function extractSnippet(body: string): string {
  *   - rating == null AND min set           → drop (unknown quality fails strict)
  *   - user_ratings_total < min_review_count → drop
  *   - business_status !== 'OPERATIONAL'    → drop (closed permanently/temporarily)
+ *   - phone == null AND require_phone set  → drop (Places already returns phone,
+ *                                            no reason to wait until cron to gate)
  *
  * Returns the surviving set plus a count of how many were dropped so the
  * caller can persist it on the batch row and explain low yields later.
@@ -147,6 +184,7 @@ function extractSnippet(body: string): string {
 export interface IcpFloors {
   min_gmb_rating: number | null
   min_review_count: number | null
+  require_phone?: boolean
 }
 
 export function filterByIcpFloors(
@@ -155,6 +193,7 @@ export function filterByIcpFloors(
 ): { fresh: PlaceSearchResult[]; skipped: number } {
   const minRating = floors.min_gmb_rating
   const minReviews = floors.min_review_count
+  const reqPhone = !!floors.require_phone
 
   let skipped = 0
   const fresh: PlaceSearchResult[] = []
@@ -175,6 +214,10 @@ export function filterByIcpFloors(
         skipped++
         continue
       }
+    }
+    if (reqPhone && !p.phone) {
+      skipped++
+      continue
     }
     fresh.push(p)
   }

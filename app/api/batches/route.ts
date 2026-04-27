@@ -61,7 +61,8 @@ export async function POST(request: NextRequest) {
 
     let places
     try {
-      places = await searchPlaces(category, city)
+      // Over-fetch via pagination so post-filter survivors hit the requested count.
+      places = await searchPlaces(category, city, count)
     } catch (error: any) {
       console.error('Error searching places:', error)
 
@@ -81,12 +82,13 @@ export async function POST(request: NextRequest) {
     // on prospects that can't satisfy ICP.
     const { data: icp } = await supabaseAdmin
       .from('icp_profile')
-      .select('min_gmb_rating, min_review_count')
+      .select('min_gmb_rating, min_review_count, require_business_phone')
       .eq('user_id', userId)
       .maybeSingle()
     const { fresh: icpFresh, skipped: filteredBelowIcp } = filterByIcpFloors(places, {
       min_gmb_rating: (icp as any)?.min_gmb_rating ?? null,
       min_review_count: (icp as any)?.min_review_count ?? null,
+      require_phone: !!(icp as any)?.require_business_phone,
     })
 
     // Skip prospects already in the system (same place_id). Avoids re-paying

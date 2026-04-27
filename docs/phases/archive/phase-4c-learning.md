@@ -151,3 +151,24 @@ Both persist on the row at create time so the batch detail UI can answer "why fe
 Batch detail UI shows a sub-line under the progress count: "Dropped at import: N below ICP floor · M already in your system". Hidden when both counts are zero.
 
 Honest tradeoff: strict ICP + thin city supply = small batches. That's the correct behavior — better than silently importing junk that wastes enrich + analyze + audit + pitch budget. If supply is consistently too thin, next move would be Google Places pagination (3× more candidates per search) — not yet built, deferred until volume warrants.
+
+### M30 — Places pagination + over-fetch + phone pre-filter
+
+User-reported (immediately following M29): "plan says 50 prospects but executing only delivers ~10." Two compounding causes:
+
+1. **No pagination.** `searchPlaces` hardcoded `pageSize: 20` and never read `nextPageToken`. So a `count: 50` plan item could never see more than 20 candidates from Google. After ICP floor + dedup + post-enrichment social filters, ~6-10 active leads was the realistic ceiling.
+2. **Phone filter fired late.** `require_business_phone` was checked in cron `checkSocialIcpGate` even though Google Places returns `nationalPhoneNumber` in the search response. Wasted enrichment budget on prospects we already knew would fail.
+
+Fix:
+
+- **`searchPlaces(category, city, desiredCount)`** — new optional 3rd argument. Function paginates via `nextPageToken` until it has `min(desiredCount × 2, 60)` candidates or pages run out. Hard ceiling 60 (Places New maximum). Default behavior when `desiredCount` is omitted is unchanged (20).
+- **`X-Goog-FieldMask`** now includes `nextPageToken` so Places returns the token for chained requests.
+- **`filterByIcpFloors`** gains optional `require_phone` flag. When true, drops places with no `nationalPhoneNumber` before insert. Counted into `count_filtered_below_icp` like the rating/review/status drops.
+- **Both call sites updated** (`POST /api/batches` and `lib/plans.ts::createBatchForPlanItem`) to pass the requested count and pull `require_business_phone` from the ICP profile.
+- **Cron `checkSocialIcpGate`** unchanged — still has phone in its `missing[]` list as defense-in-depth, but that branch is now effectively dead code on the happy path. Left in deliberately; running it costs nothing and protects against future flows that bypass `filterByIcpFloors`.
+
+What this fixes: a 50-prospect plan item now actually attempts to deliver 50, by fetching up to 60 raw candidates and filtering them down. With moderate ICP floors (4.0 rating, 20 reviews) typical yield should now hit 30–40 active leads where it was 6–10 before.
+
+What this does NOT fix: `require_linkedin / require_instagram / require_facebook / require_reachable` still drop leads AFTER enrichment because they need a website scrape to evaluate. If all four are toggled on, expect another 30–60% post-enrichment drop. Honest answer to that gap is option (b) from the design discussion: keep enriching extra candidates from the Places result until target N active is reached. Deferred — measure first, we may not need it.
+
+Cost impact: a 50-count batch now does up to 3 Places Text Search calls instead of 1. Places New billing for Text Search Pro (with our field mask) is ~$32/1k → +~$0.064 per heavy batch. Negligible vs. the enrichment + analyze + pitch budget downstream.

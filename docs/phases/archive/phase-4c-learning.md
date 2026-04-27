@@ -270,3 +270,23 @@ Picked Lusha over Apollo for paid path because:
 **Env:** `LUSHA_API_KEY` added (optional). `APOLLO_WEBHOOK_SECRET` and `NEXT_PUBLIC_APP_URL` are no longer required for phone reveal (`NEXT_PUBLIC_APP_URL` still used by tracking pixel + unsub URLs).
 
 Migration columns `phone_revealed_at` (M31) and `phone_request_id` (M32) are KEPT — can't undo migrations cleanly, and `phone_revealed_at` is reused as the audit timestamp for both `useBusinessPhone` and `findDirectLine`. `phone_request_id` is now legacy-only and never written by new code.
+
+### M35 — Lead-stage filters on batch detail
+
+User asked for filters by outreach stage on the prospect list. Six chips, mutually exclusive, each with a live count:
+
+- **All** — full list (default)
+- **No outreach** — pitched/analyzed but no email sent yet
+- **In contact** — at least one `sent_emails` row exists
+- **Opened** — at least one `email_opens` row that is NOT `is_probably_self` AND NOT `is_probably_mpp`
+- **Replied** — at least one `email_replies` row
+- **Call phase** — `channel_recommendations.recommended_channel === 'phone'`
+
+Implemented entirely in `app/(dashboard)/batches/[id]/page.tsx`. Three additional Supabase queries on load (parallel):
+- `pitches` joined to `sent_emails → email_opens` and `sent_emails → email_replies` (filtered for non-self / non-MPP opens)
+- `channel_recommendations` for `recommended_channel`
+- (existing) failed jobs
+
+Per-prospect rows now also show "outreach chips" alongside the status chip — `replied` / `opened` / `in contact` (only the highest-progress one shows) plus `call` if recommendation is phone. Lets you see *why* a row matched a filter without clicking through.
+
+No new tables, no new routes, no schema change. Pure UI on existing data.

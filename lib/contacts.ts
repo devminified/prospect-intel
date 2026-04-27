@@ -65,6 +65,8 @@ interface ApolloPerson {
 interface ContactInsert {
   prospect_id: string
   full_name: string | null
+  first_name: string | null
+  last_name: string | null
   title: string | null
   seniority: string | null
   department: string | null
@@ -104,6 +106,8 @@ export async function discoverPeople(prospectId: string): Promise<void> {
     await supabaseAdmin.from('contacts').insert({
       prospect_id: prospectId,
       full_name: null,
+      first_name: null,
+      last_name: null,
       title: null,
       seniority: null,
       department: null,
@@ -120,19 +124,36 @@ export async function discoverPeople(prospectId: string): Promise<void> {
   const people = await apolloPeopleSearch(domain)
   if (people.length === 0) return
 
-  const rows: ContactInsert[] = people.slice(0, MAX_CONTACTS).map((p) => ({
-    prospect_id: prospectId,
-    full_name: p.name ?? joinName(p.first_name, p.last_name),
-    title: p.title ?? null,
-    seniority: p.seniority ?? inferSeniority(p.title),
-    department: p.departments?.[0] ?? null,
-    email: p.email ?? null,
-    email_confidence: p.email ? mapConfidence(p.email_status) : null,
-    phone: null,
-    linkedin_url: p.linkedin_url ?? null,
-    apollo_person_id: p.id ?? null,
-    is_primary: false,
-  }))
+  const rows: ContactInsert[] = people.slice(0, MAX_CONTACTS).map((p) => {
+    // Apollo returns first_name + last_name as separate fields on the search
+    // response — preserve them rather than collapsing into full_name and
+    // losing the split. Lusha's matcher needs lastName to be reliable.
+    const apolloFirst = (p.first_name ?? '').trim() || null
+    const apolloLast = (p.last_name ?? '').trim() || null
+    const display = p.name ?? joinName(apolloFirst ?? undefined, apolloLast ?? undefined)
+    // Fallback split: if Apollo only returned a `name` and didn't give us
+    // first/last separately, derive them so downstream callers don't have to.
+    const splitParts = !apolloFirst && !apolloLast && display
+      ? display.trim().split(/\s+/).filter(Boolean)
+      : []
+    const firstName = apolloFirst ?? splitParts[0] ?? null
+    const lastName = apolloLast ?? (splitParts.length > 1 ? splitParts[splitParts.length - 1] : null)
+    return {
+      prospect_id: prospectId,
+      full_name: display,
+      first_name: firstName,
+      last_name: lastName,
+      title: p.title ?? null,
+      seniority: p.seniority ?? inferSeniority(p.title),
+      department: p.departments?.[0] ?? null,
+      email: p.email ?? null,
+      email_confidence: p.email ? mapConfidence(p.email_status) : null,
+      phone: null,
+      linkedin_url: p.linkedin_url ?? null,
+      apollo_person_id: p.id ?? null,
+      is_primary: false,
+    }
+  })
 
   rows.sort((a, b) => pitchPriority(a.title) - pitchPriority(b.title))
   if (rows.length > 0) rows[0].is_primary = true
@@ -242,7 +263,7 @@ export async function findDirectLine(
 ): Promise<{ phone: string | null }> {
   const { data: contact, error: cErr } = await supabaseAdmin
     .from('contacts')
-    .select('id, prospect_id, full_name, linkedin_url, phone, phone_source')
+    .select('id, prospect_id, full_name, first_name, last_name, linkedin_url, phone, phone_source')
     .eq('id', contactId)
     .single()
   if (cErr || !contact) throw new Error(`Contact not found: ${contactId}`)
@@ -258,10 +279,25 @@ export async function findDirectLine(
 
   const domain = extractDomain((prospect as any)?.website ?? null)
   const companyName = ((prospect as any)?.name ?? null) as string | null
-  const fullName = (contact as any).full_name as string | null
-  const parts = fullName ? fullName.trim().split(/\s+/) : []
-  const firstName = parts[0] ?? null
-  const lastName = parts.length > 1 ? parts[parts.length - 1] : null
+
+  // Prefer the structured first_name/last_name we now store at discovery
+  // time. Fall back to splitting full_name for legacy rows that predate
+  // the M35.2 migration — and persist the split back so we don't redo
+  // this every time.
+  let firstName = ((contact as any).first_name ?? null) as string | null
+  let lastName = ((contact as any).last_name ?? null) as string | null
+  if (!firstName && !lastName) {
+    const fullName = (contact as any).full_name as string | null
+    const parts = fullName ? fullName.trim().split(/\s+/).filter(Boolean) : []
+    firstName = parts[0] ?? null
+    lastName = parts.length > 1 ? parts[parts.length - 1] : null
+    if (firstName || lastName) {
+      await supabaseAdmin
+        .from('contacts')
+        .update({ first_name: firstName, last_name: lastName })
+        .eq('id', contactId)
+    }
+  }
 
   const result = await lushaFindPerson({
     firstName,

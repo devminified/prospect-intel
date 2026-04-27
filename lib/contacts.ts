@@ -144,10 +144,13 @@ export async function discoverPeople(prospectId: string): Promise<void> {
 
 /**
  * Spend one Apollo email credit to reveal the verified email for a single
- * already-discovered contact. Updates the row in place with email, phone,
- * and a timestamp so we have an audit trail of when credits were consumed.
+ * already-discovered contact. Updates the row in place with email
+ * + email_revealed_at audit timestamp.
+ *
+ * Phone is NOT revealed here — that's a separate, more expensive credit
+ * pool. Use revealPhone() if the user explicitly wants to spend it.
  */
-export async function revealEmail(contactId: string): Promise<{ email: string | null; phone: string | null }> {
+export async function revealEmail(contactId: string): Promise<{ email: string | null }> {
   const { data: contact, error: cErr } = await supabaseAdmin
     .from('contacts')
     .select('id, apollo_person_id, email, email_revealed_at')
@@ -161,7 +164,7 @@ export async function revealEmail(contactId: string): Promise<{ email: string | 
     throw new Error('Contact has no Apollo person id — cannot reveal email')
   }
   if (contact.email && contact.email_revealed_at) {
-    return { email: contact.email, phone: null }
+    return { email: contact.email }
   }
 
   const result = await apolloPeopleMatch(contact.apollo_person_id)
@@ -174,7 +177,6 @@ export async function revealEmail(contactId: string): Promise<{ email: string | 
     .update({
       email: result.email,
       email_confidence: result.email ? mapConfidence(result.email_status) : null,
-      phone: result.phone ?? null,
       email_revealed_at: new Date().toISOString(),
     })
     .eq('id', contactId)
@@ -182,7 +184,54 @@ export async function revealEmail(contactId: string): Promise<{ email: string | 
     throw new Error(`Failed to persist revealed email: ${updateErr.message}`)
   }
 
-  return { email: result.email ?? null, phone: result.phone ?? null }
+  return { email: result.email ?? null }
+}
+
+/**
+ * Spend one Apollo phone credit to reveal the direct/mobile phone for a single
+ * already-discovered contact. Phone credits are billed separately from email
+ * credits and are typically more expensive — only call when the user has
+ * explicitly opted in (e.g. clicked "Reveal phone" on the contact row).
+ *
+ * If Apollo has no phone on file, we still stamp `phone_revealed_at` so we
+ * don't keep retrying and burning another credit on the same dead end.
+ */
+export async function revealPhone(contactId: string): Promise<{ phone: string | null }> {
+  const { data: contact, error: cErr } = await supabaseAdmin
+    .from('contacts')
+    .select('id, apollo_person_id, phone, phone_revealed_at')
+    .eq('id', contactId)
+    .single()
+
+  if (cErr || !contact) {
+    throw new Error(`Contact not found: ${contactId}`)
+  }
+  if (!contact.apollo_person_id) {
+    throw new Error('Contact has no Apollo person id — cannot reveal phone')
+  }
+  if (contact.phone && contact.phone_revealed_at) {
+    return { phone: contact.phone }
+  }
+
+  const result = await apolloPeopleMatch(contact.apollo_person_id, { revealPhone: true })
+  if (!result) {
+    throw new Error('Apollo returned no match for this contact')
+  }
+
+  const update: { phone?: string | null; phone_revealed_at: string } = {
+    phone_revealed_at: new Date().toISOString(),
+  }
+  if (result.phone) update.phone = result.phone
+
+  const { error: updateErr } = await supabaseAdmin
+    .from('contacts')
+    .update(update)
+    .eq('id', contactId)
+  if (updateErr) {
+    throw new Error(`Failed to persist revealed phone: ${updateErr.message}`)
+  }
+
+  return { phone: result.phone ?? null }
 }
 
 async function apolloPeopleSearch(domain: string): Promise<ApolloPerson[]> {
@@ -218,7 +267,10 @@ interface ApolloMatchResult {
   phone?: string | null
 }
 
-async function apolloPeopleMatch(personId: string): Promise<ApolloMatchResult | null> {
+async function apolloPeopleMatch(
+  personId: string,
+  opts?: { revealPhone?: boolean }
+): Promise<ApolloMatchResult | null> {
   const res = await fetch(`${APOLLO_BASE}/people/match`, {
     method: 'POST',
     headers: {
@@ -229,7 +281,7 @@ async function apolloPeopleMatch(personId: string): Promise<ApolloMatchResult | 
     body: JSON.stringify({
       id: personId,
       reveal_personal_emails: false,
-      reveal_phone_number: false,
+      reveal_phone_number: !!opts?.revealPhone,
     }),
   })
 

@@ -32,6 +32,8 @@ interface Contact {
   department: string | null
   email: string | null
   email_confidence: string | null
+  phone: string | null
+  phone_revealed_at: string | null
   linkedin_url: string | null
   is_primary: boolean
 }
@@ -133,6 +135,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   const [copiedAt, setCopiedAt] = useState<string | null>(null)
   const [discovering, setDiscovering] = useState(false)
   const [revealingId, setRevealingId] = useState<string | null>(null)
+  const [revealingPhoneId, setRevealingPhoneId] = useState<string | null>(null)
   const [regenerating, setRegenerating] = useState(false)
   const [recommending, setRecommending] = useState(false)
   const [scriptCopiedAt, setScriptCopiedAt] = useState<string | null>(null)
@@ -151,7 +154,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       supabase.from('enrichments').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('analyses').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('pitches').select('id, subject, body, edited_body, status').eq('prospect_id', id).maybeSingle(),
-      supabase.from('contacts').select('id, full_name, title, seniority, department, email, email_confidence, linkedin_url, is_primary').eq('prospect_id', id),
+      supabase.from('contacts').select('id, full_name, title, seniority, department, email, email_confidence, phone, phone_revealed_at, linkedin_url, is_primary').eq('prospect_id', id),
       supabase.from('visibility_audits').select('*').eq('prospect_id', id).maybeSingle(),
       supabase.from('channel_recommendations').select('phone_fit_score, email_fit_score, recommended_channel, reasoning, phone_script, generated_at').eq('prospect_id', id).maybeSingle(),
     ])
@@ -297,6 +300,25 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       setError(e.message)
     } finally {
       setRevealingId(null)
+    }
+  }
+
+  async function revealPhoneAction(contactId: string) {
+    if (!confirm('Spend 1 Apollo phone credit to reveal this number? Phone credits are billed separately from email credits.')) return
+    setRevealingPhoneId(contactId)
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/prospects/${id}/contacts/${contactId}/reveal-phone`, { method: 'POST', headers })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'reveal phone failed' }))
+        throw new Error(err.error ?? 'reveal phone failed')
+      }
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setRevealingPhoneId(null)
     }
   }
 
@@ -832,6 +854,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                     <th className="py-2 pr-4">Title</th>
                     <th className="py-2 pr-4">Level</th>
                     <th className="py-2 pr-4">Email</th>
+                    <th className="py-2 pr-4">Phone</th>
                     <th className="py-2 pr-4">LinkedIn</th>
                     <th className="py-2"></th>
                   </tr>
@@ -863,6 +886,32 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                             title="Spends 1 Apollo email credit"
                           >
                             {revealingId === c.id ? 'Revealing…' : 'Reveal email'}
+                          </Button>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-4">
+                        {c.phone ? (
+                          <a href={`tel:${c.phone}`} className="text-primary hover:underline">
+                            {c.phone}
+                          </a>
+                        ) : c.phone_revealed_at ? (
+                          <span
+                            className="text-xs text-muted-foreground"
+                            title="Apollo had no phone for this contact"
+                          >
+                            none on file
+                          </span>
+                        ) : c.full_name && c.id ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => revealPhoneAction(c.id)}
+                            disabled={revealingPhoneId === c.id}
+                            title="Spends 1 Apollo phone credit (separate pool from email credits)"
+                          >
+                            {revealingPhoneId === c.id ? 'Revealing…' : 'Reveal phone'}
                           </Button>
                         ) : (
                           <span className="text-muted-foreground">—</span>

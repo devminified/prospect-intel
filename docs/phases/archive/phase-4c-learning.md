@@ -172,3 +172,18 @@ What this fixes: a 50-prospect plan item now actually attempts to deliver 50, by
 What this does NOT fix: `require_linkedin / require_instagram / require_facebook / require_reachable` still drop leads AFTER enrichment because they need a website scrape to evaluate. If all four are toggled on, expect another 30–60% post-enrichment drop. Honest answer to that gap is option (b) from the design discussion: keep enriching extra candidates from the Places result until target N active is reached. Deferred — measure first, we may not need it.
 
 Cost impact: a 50-count batch now does up to 3 Places Text Search calls instead of 1. Places New billing for Text Search Pro (with our field mask) is ~$32/1k → +~$0.064 per heavy batch. Negligible vs. the enrichment + analyze + pitch budget downstream.
+
+### M31 — Apollo phone reveal (separate credit pool)
+
+Email reveal already shipped in Phase 2; phone reveal was bundled into the same call (`reveal_phone_number: false` hardcoded) so we never had a way to spend phone credits — even when the user wanted to cold-call instead of email.
+
+Apollo bills email and phone reveals as separate credit pools. Phone is typically more expensive, so it must be an explicit, per-contact action rather than a side-effect of email reveal.
+
+- **Migration `20260427000000_phone_reveal.sql`** — adds `contacts.phone_revealed_at timestamptz`. Mirrors the existing `email_revealed_at` audit column. Non-null even when Apollo had no phone on file, so we don't retry and burn another credit on a known dead end.
+- **`lib/contacts.ts`** — new `revealPhone(contactId)` calls `apolloPeopleMatch(personId, { revealPhone: true })`. Updates `contacts.phone` + `phone_revealed_at`.
+- **`apolloPeopleMatch`** signature now takes `opts?.revealPhone`. `reveal_phone_number` flag passes through.
+- **`revealEmail` no longer touches `phone`.** Previously it wrote `phone: result.phone ?? null` which could clobber a previously-revealed phone with null on a subsequent email-reveal click. Email reveal is now strictly email-only.
+- **New route** `POST /api/prospects/:id/contacts/:contactId/reveal-phone` — JWT + ownership check (contact → prospect → batch → user) mirroring the email-reveal route.
+- **UI** — prospect detail contacts table gains a "Phone" column. Three states per row: phone present (shown as `tel:` link), `phone_revealed_at` non-null but no phone (shows "none on file"), or neither (shows "Reveal phone" button with confirm dialog explaining the separate credit).
+
+Why a `confirm()` dialog: phone credits cost meaningfully more than email credits in Apollo's pricing tiers. A double-tap safeguard prevents accidental clicks from burning the more expensive credit pool.

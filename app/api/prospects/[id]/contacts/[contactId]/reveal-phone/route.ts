@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
-import { revealEmail } from '@/lib/contacts'
+import { revealPhone } from '@/lib/contacts'
 
 export async function POST(
   request: NextRequest,
@@ -19,7 +19,6 @@ export async function POST(
   }
   const userId = userData.user.id
 
-  // Ownership: contact → prospect → batch → user
   const { data: contact, error: cErr } = await supabaseAdmin
     .from('contacts')
     .select('id, prospect_id, prospects!inner(batches!inner(user_id))')
@@ -37,11 +36,11 @@ export async function POST(
   }
 
   try {
-    const result = await revealEmail(contactId)
-    return NextResponse.json({ ok: true, email: result.email })
+    const result = await revealPhone(contactId)
+    return NextResponse.json({ ok: true, phone: result.phone })
   } catch (error: any) {
     return NextResponse.json(
-      { error: error?.message ?? 'Reveal failed' },
+      { error: error?.message ?? 'Reveal phone failed' },
       { status: 500 }
     )
   }

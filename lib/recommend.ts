@@ -121,7 +121,9 @@ export async function recommendChannel(prospectId: string): Promise<void> {
 async function callSonnet(prompt: string): Promise<ChannelRecommendation> {
   const response = await anthropic.messages.create({
     model: SONNET_MODEL,
-    max_tokens: 1024,
+    // Full call script (350-500 words, ~700 tokens) + reasoning + scores.
+    // 1024 truncated; 4096 leaves headroom for the longest scripts.
+    max_tokens: 4096,
     temperature: 0.5,
     thinking: { type: 'disabled' },
     output_config: {

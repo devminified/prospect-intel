@@ -316,14 +316,57 @@ Email-leaning signals:
 If signals are mixed or weak, recommend "either" with fit scores within 10 points of each other.
 
 PHONE SCRIPT RULES (only required if recommended_channel is "phone" or "either")
-- 60-80 words total. Reads in 25-35 seconds.
-- Open with a pattern-interrupt + first-name ONLY if primary_contact first name is known.
-- Reference one concrete observation from PRIMARY PAIN or BEST ANGLE — not generic.
-- Assume you'll hit a gatekeeper or the decision-maker directly; write for either.
-- End with a permission ask ("got 30 seconds?") — NOT a hard pitch close.
-- Conversational, not read-from-a-script stiff. Contractions are fine.
-- NEVER use "synergy", "leverage", "cutting-edge", "solutions provider", "I help businesses like yours".
-- If no first name is known, open with "Hey, is this ${i.name.split(/\s+/)[0]}?" style.
+
+Write a FULL call script — opening through close — plus a voicemail variant
+and 2-3 objection handlers. The user reads this on the call (off-screen, not
+verbatim). Cover the entire conversation, not just the opener.
+
+Format the script as plain text with these section headers, in this exact
+order, separated by blank lines. Use UPPERCASE labels for the section
+headers. No markdown symbols, no bullets except inside OBJECTION HANDLERS.
+
+  OPENING (10-15 seconds)
+  <pattern interrupt + first-name greeting if known + permission ask>
+
+  DISCOVERY (one or two light questions, ~20 seconds)
+  <one or two open questions tied to PRIMARY PAIN or BEST ANGLE. Do not
+   pitch yet — get them talking about the pain in their own words.>
+
+  VALUE BRIDGE (~30 seconds)
+  <Two or three sentences: (1) name something concrete you saw on their
+   site/listing, (2) name what that costs them in real terms, (3) name
+   what you'd build that fixes it. Specific to THIS business, never
+   generic agency speak.>
+
+  SOFT CLOSE (~15 seconds)
+  <Propose a low-friction next step. Offer two paths: a 15-minute call OR
+   a short Loom walk-through you can text/email. Let them pick.>
+
+  OBJECTION HANDLERS
+  - "Not interested": <one sentence rebuttal>
+  - "Send me an email": <one sentence — agree, but qualify with a single question first>
+  - "We already have someone": <one sentence — acknowledge + reframe>
+
+  VOICEMAIL (if no answer, 20-25 seconds)
+  <Hook tied to their specific business + one-sentence reason for calling +
+   callback number prompt + promise of a follow-up email with the details.>
+
+WRITING RULES
+- 350-500 words total across all sections combined.
+- Conversational, sounds like a real person on the phone. Contractions are fine.
+- Reference at least ONE concrete observation about THIS business pulled from
+  PRIMARY PAIN, BEST ANGLE, or VISIBILITY SNAPSHOT. No generic "I help businesses
+  like yours" anywhere in the script.
+- If primary contact first name is known, use it ONCE in the opening only —
+  not in every section. If not known, open with "Hey, is this ${i.name.split(/\s+/)[0]}?"-style.
+- Assume a gatekeeper might pick up. Write the opening so it lands either way:
+  ask for the decision-maker by first name OR ask if you're speaking to them.
+- Use real numbers when you have them ("47 reviews", "ranked #4 for ___").
+- The SOFT CLOSE must offer an OPTION, not a hard ask. Two paths, their choice.
+- VOICEMAIL must be ≤25 seconds spoken. Lead with WHY you called, not WHO you are.
+- NEVER use: "synergy", "leverage", "cutting-edge", "solutions provider",
+  "I help businesses like yours", "circle back", "touch base", "low-hanging fruit",
+  "next-gen", "best-in-class", "value-add".
 
 Return ONLY valid JSON matching the required schema.`
 }

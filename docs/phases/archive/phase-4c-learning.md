@@ -209,3 +209,22 @@ M31 shipped synchronous, then on first click hit `HTTP 400: Please add a valid '
 - **New env vars** — `APOLLO_WEBHOOK_SECRET` (in addition to existing `NEXT_PUBLIC_APP_URL`). Both must be set in Vercel before phone reveal works in production.
 
 Reachability: webhook only works in deployed environments (localhost is unreachable from Apollo). To test in dev, use `cloudflared tunnel` or `ngrok` and override `NEXT_PUBLIC_APP_URL` locally.
+
+### M33 — Full phone call script (opening through close)
+
+M22 shipped a 60-80 word "phone opening script" — useful for the first 25 seconds, useless once the prospect started talking. User asked for a complete script: start to end.
+
+`channelRecommendationPrompt` PHONE SCRIPT RULES rewritten. Sonnet now produces a single string with six labeled sections separated by blank lines (rendered via `whitespace-pre-wrap font-mono` so the structure survives copy/paste):
+
+- **OPENING** (10–15s) — pattern interrupt + first-name greeting + permission ask
+- **DISCOVERY** (~20s) — one or two open questions tied to PRIMARY PAIN / BEST ANGLE
+- **VALUE BRIDGE** (~30s) — concrete observation + cost framing + what we'd build
+- **SOFT CLOSE** (~15s) — two-path option (15-min call OR Loom walk-through), their pick
+- **OBJECTION HANDLERS** — one-liner rebuttals for "not interested", "send me an email", "we already have someone"
+- **VOICEMAIL** (≤25s) — fallback for no-answer
+
+Word budget: 350–500 across all sections. Anti-cliché list expanded ("synergy", "leverage", "circle back", "touch base", "low-hanging fruit", "next-gen", "best-in-class", "value-add" all banned). Required: at least one concrete observation pulled from this specific prospect's PRIMARY PAIN, BEST ANGLE, or VISIBILITY SNAPSHOT — no generic agency speak.
+
+`recommend.ts::callSonnet` `max_tokens` bumped 1024 → 4096 to fit the longer script + reasoning + scores without truncation.
+
+UI label changed "Phone opening script" → "Phone call script". Helper copy updated to set the right expectation ("Full call script — opening through close, plus objection handlers and a voicemail variant").

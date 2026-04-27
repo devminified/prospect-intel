@@ -806,20 +806,20 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                 <div>
                   <div className="flex items-baseline justify-between mb-1">
                     <div className="text-xs font-semibold uppercase text-muted-foreground">
-                      Phone opening script
+                      Phone call script
                     </div>
                     <Button variant="outline" size="sm" onClick={copyScript}>
                       Copy script
                     </Button>
                   </div>
-                  <div className="p-3 bg-muted/50 rounded-md text-sm leading-relaxed whitespace-pre-wrap">
+                  <div className="p-3 bg-muted/50 rounded-md text-sm leading-relaxed whitespace-pre-wrap font-mono">
                     {recommendation.phone_script}
                   </div>
                   {scriptCopiedAt && (
                     <div className="mt-1 text-xs text-muted-foreground">copied at {scriptCopiedAt}</div>
                   )}
                   <p className="mt-2 text-xs text-muted-foreground">
-                    Reads in ~25–35 seconds. Adjust tone to match your voice before dialing.
+                    Full call script — opening through close, plus objection handlers and a voicemail variant. Skim before dialing and adjust tone to match your voice.
                   </p>
                 </div>
               )}

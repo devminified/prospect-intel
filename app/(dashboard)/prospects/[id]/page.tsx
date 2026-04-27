@@ -136,6 +136,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   const [discovering, setDiscovering] = useState(false)
   const [revealingId, setRevealingId] = useState<string | null>(null)
   const [phoneActionId, setPhoneActionId] = useState<string | null>(null)
+  const [savingLinkedinId, setSavingLinkedinId] = useState<string | null>(null)
   const [regenerating, setRegenerating] = useState(false)
   const [recommending, setRecommending] = useState(false)
   const [scriptCopiedAt, setScriptCopiedAt] = useState<string | null>(null)
@@ -318,6 +319,36 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       setError(e.message)
     } finally {
       setPhoneActionId(null)
+    }
+  }
+
+  async function setLinkedinAction(contactId: string, currentUrl: string | null) {
+    const input = window.prompt(
+      currentUrl
+        ? 'Update LinkedIn profile URL (or clear to remove):'
+        : 'Paste the LinkedIn profile URL for this contact (Lusha matches against this most reliably):',
+      currentUrl ?? ''
+    )
+    if (input === null) return // cancel
+    const trimmed = input.trim()
+    setSavingLinkedinId(contactId)
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/prospects/${id}/contacts/${contactId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ linkedin_url: trimmed === '' ? null : trimmed }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'save linkedin failed' }))
+        throw new Error(err.error ?? 'save linkedin failed')
+      }
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setSavingLinkedinId(null)
     }
   }
 
@@ -962,18 +993,29 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                         )}
                       </td>
                       <td className="py-2 pr-4">
-                        {c.linkedin_url ? (
-                          <a
-                            href={c.linkedin_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-primary hover:underline"
+                        <span className="flex items-center gap-2">
+                          {c.linkedin_url ? (
+                            <a
+                              href={c.linkedin_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-primary hover:underline"
+                            >
+                              profile ↗
+                            </a>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setLinkedinAction(c.id, c.linkedin_url)}
+                            disabled={savingLinkedinId === c.id}
+                            title={c.linkedin_url ? 'Edit LinkedIn URL' : 'Set LinkedIn URL — enables Lusha direct-line matching'}
                           >
-                            profile ↗
-                          </a>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
+                            {savingLinkedinId === c.id ? 'Saving…' : c.linkedin_url ? 'Edit' : 'Set'}
+                          </Button>
+                        </span>
                       </td>
                       <td className="py-2">
                         {c.is_primary && (

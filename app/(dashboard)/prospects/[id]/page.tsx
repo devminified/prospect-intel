@@ -137,6 +137,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   const [revealingId, setRevealingId] = useState<string | null>(null)
   const [phoneActionId, setPhoneActionId] = useState<string | null>(null)
   const [savingLinkedinId, setSavingLinkedinId] = useState<string | null>(null)
+  const [savingNameId, setSavingNameId] = useState<string | null>(null)
   const [regenerating, setRegenerating] = useState(false)
   const [recommending, setRecommending] = useState(false)
   const [scriptCopiedAt, setScriptCopiedAt] = useState<string | null>(null)
@@ -319,6 +320,51 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       setError(e.message)
     } finally {
       setPhoneActionId(null)
+    }
+  }
+
+  async function editNameAction(contactId: string, currentFullName: string | null) {
+    const input = window.prompt(
+      'Enter contact name as "First Last" — used by Lusha to match a direct line:',
+      currentFullName ?? ''
+    )
+    if (input === null) return
+    const trimmed = input.trim()
+    if (trimmed === '') {
+      setError('Name cannot be empty')
+      return
+    }
+    const parts = trimmed.split(/\s+/).filter(Boolean)
+    const firstName = parts[0] ?? null
+    const lastName = parts.length > 1 ? parts[parts.length - 1] : null
+    if (!lastName) {
+      const proceed = window.confirm(
+        'Only one word — Lusha needs a last name to match. Proceed anyway?'
+      )
+      if (!proceed) return
+    }
+    setSavingNameId(contactId)
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/prospects/${id}/contacts/${contactId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          first_name: firstName,
+          last_name: lastName,
+          full_name: trimmed,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'save name failed' }))
+        throw new Error(err.error ?? 'save name failed')
+      }
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setSavingNameId(null)
     }
   }
 
@@ -919,7 +965,20 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                 <tbody className="divide-y">
                   {sortedContacts.map((c) => (
                     <tr key={c.id} className={c.is_primary ? 'bg-primary/5' : ''}>
-                      <td className="py-2 pr-4 font-medium">{c.full_name ?? '—'}</td>
+                      <td className="py-2 pr-4 font-medium">
+                        <span className="flex items-center gap-2">
+                          <span>{c.full_name ?? '—'}</span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => editNameAction(c.id, c.full_name)}
+                            disabled={savingNameId === c.id}
+                            title={c.full_name ? 'Edit name (used by Lusha matcher)' : 'Set name — required for Lusha direct-line matching'}
+                          >
+                            {savingNameId === c.id ? 'Saving…' : c.full_name ? 'Edit' : 'Set'}
+                          </Button>
+                        </span>
+                      </td>
                       <td className="py-2 pr-4 text-muted-foreground">{c.title ?? '—'}</td>
                       <td className="py-2 pr-4">
                         <SeniorityChip seniority={c.seniority} />

@@ -81,6 +81,14 @@ export async function PATCH(
       update.last_name = raw.trim() || null
     }
   }
+  if ('full_name' in body) {
+    const raw = (body as any).full_name
+    if (raw === null || raw === '') {
+      update.full_name = null
+    } else if (typeof raw === 'string') {
+      update.full_name = raw.trim() || null
+    }
+  }
 
   if (Object.keys(update).length === 0) {
     return NextResponse.json({ error: 'No editable fields provided' }, { status: 400 })

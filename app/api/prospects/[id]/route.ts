@@ -3,11 +3,23 @@ import { supabaseAdmin } from '@/lib/supabase/server'
 
 const ALLOWED_PROSPECT_STATUSES = ['new', 'enriched', 'analyzed', 'ready', 'contacted', 'replied', 'rejected']
 const ALLOWED_PITCH_STATUSES = ['draft', 'approved', 'sent', 'replied']
+const ALLOWED_OUTREACH_STATUSES = [
+  'calling',
+  'voicemail',
+  'no_answer',
+  'call_ended',
+  'follow_up',
+  'qualified',
+  'not_interested',
+  'do_not_contact',
+]
 
 interface PatchBody {
   prospect_status?: string
   pitch_edited_body?: string
   pitch_status?: string
+  outreach_status?: string | null
+  mark_viewed?: boolean
 }
 
 export async function PATCH(
@@ -45,6 +57,44 @@ export async function PATCH(
     body = await request.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+  }
+
+  if (body.outreach_status !== undefined) {
+    if (body.outreach_status === null || body.outreach_status === '') {
+      const { error } = await supabaseAdmin
+        .from('prospects')
+        .update({ outreach_status: null })
+        .eq('id', prospectId)
+      if (error) {
+        return NextResponse.json({ error: `Failed to clear outreach_status: ${error.message}` }, { status: 500 })
+      }
+    } else if (typeof body.outreach_status === 'string') {
+      const v = body.outreach_status.trim()
+      if (!ALLOWED_OUTREACH_STATUSES.includes(v)) {
+        return NextResponse.json(
+          { error: `Invalid outreach_status. Allowed: ${ALLOWED_OUTREACH_STATUSES.join(', ')}` },
+          { status: 400 }
+        )
+      }
+      const { error } = await supabaseAdmin
+        .from('prospects')
+        .update({ outreach_status: v })
+        .eq('id', prospectId)
+      if (error) {
+        return NextResponse.json({ error: `Failed to update outreach_status: ${error.message}` }, { status: 500 })
+      }
+    }
+  }
+
+  if (body.mark_viewed === true) {
+    const { error } = await supabaseAdmin
+      .from('prospects')
+      .update({ last_viewed_at: new Date().toISOString() })
+      .eq('id', prospectId)
+    if (error) {
+      // Non-fatal — viewed-tracking is best-effort, don't block the rest of the PATCH.
+      console.warn('mark_viewed failed:', error.message)
+    }
   }
 
   if (body.prospect_status !== undefined) {

@@ -22,10 +22,23 @@ interface Prospect {
   website: string | null
   rating: number | null
   review_count: number | null
+  outreach_status: string | null
+  last_viewed_at: string | null
   analyses: { opportunity_score: number | null; best_angle: string | null } | null
   last_error?: string | null
   failed_stage?: string | null
   outreach: OutreachState
+}
+
+const OUTREACH_LABEL: Record<string, string> = {
+  calling: 'Calling now',
+  no_answer: 'No answer',
+  voicemail: 'Voicemail',
+  call_ended: 'Call ended',
+  follow_up: 'Follow up',
+  qualified: 'Qualified',
+  not_interested: 'Not interested',
+  do_not_contact: 'DNC',
 }
 
 type FilterKey = 'all' | 'no_outreach' | 'in_contact' | 'opened' | 'replied' | 'call_phase'
@@ -92,7 +105,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
 
     const { data: p, error: pErr } = await supabase
       .from('prospects')
-      .select('id, name, status, website, rating, review_count, analyses(opportunity_score, best_angle)')
+      .select('id, name, status, website, rating, review_count, outreach_status, last_viewed_at, analyses(opportunity_score, best_angle)')
       .eq('batch_id', id)
     if (pErr) {
       setError(`Prospects load failed: ${pErr.message}`)
@@ -284,17 +297,29 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
               {prospects.filter((p) => matchesFilter(p, filter)).map((p) => {
                 const score = p.analyses?.opportunity_score ?? null
                 const angle = p.analyses?.best_angle ?? null
+                const viewed = !!p.last_viewed_at
                 return (
                   <Link
                     key={p.id}
                     href={`/prospects/${p.id}`}
-                    className="block p-6 hover:bg-muted/50 transition-colors"
+                    className={`block p-6 hover:bg-muted/50 transition-colors ${viewed ? 'opacity-70' : ''}`}
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="font-medium truncate">{p.name}</h3>
+                          {!viewed && (
+                            <span className="h-2 w-2 rounded-full bg-primary shrink-0" title="Not viewed yet" />
+                          )}
+                          <h3 className={`truncate ${viewed ? 'font-normal' : 'font-semibold'}`}>{p.name}</h3>
                           <StatusChip status={p.status} />
+                          {p.outreach_status && (
+                            <span
+                              className="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-orange-100 text-orange-800"
+                              title="Manual outreach status — set on the prospect detail page"
+                            >
+                              {OUTREACH_LABEL[p.outreach_status] ?? p.outreach_status}
+                            </span>
+                          )}
                           <OutreachChips outreach={p.outreach} />
                         </div>
                         {angle && <p className="mt-2 text-sm text-muted-foreground line-clamp-2">{angle}</p>}

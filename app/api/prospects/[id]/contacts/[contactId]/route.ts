@@ -90,6 +90,29 @@ export async function PATCH(
     }
   }
 
+  if ('phone' in body) {
+    const raw = (body as any).phone
+    if (raw === null || raw === '') {
+      update.phone = null
+      update.phone_source = null
+      update.phone_revealed_at = null
+    } else if (typeof raw === 'string') {
+      const trimmed = raw.trim()
+      // Permissive validation — accept any reasonable phone-shaped string.
+      // Tel UI on mobile devices uses the value as-is so let dialer agents
+      // handle formatting.
+      if (!/[\d]{6,}/.test(trimmed.replace(/\D/g, ''))) {
+        return NextResponse.json(
+          { error: 'Phone number looks too short — at least 6 digits required' },
+          { status: 400 }
+        )
+      }
+      update.phone = trimmed
+      update.phone_source = 'manual'
+      update.phone_revealed_at = new Date().toISOString()
+    }
+  }
+
   if (Object.keys(update).length === 0) {
     return NextResponse.json({ error: 'No editable fields provided' }, { status: 400 })
   }

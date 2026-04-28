@@ -80,6 +80,8 @@ interface Detail {
     name: string
     batch_id: string
     status: string
+    outreach_status: string | null
+    last_viewed_at: string | null
     website: string | null
     address: string | null
     phone: string | null
@@ -118,6 +120,18 @@ interface Detail {
 
 const PROSPECT_STATUSES = ['new', 'enriched', 'analyzed', 'ready', 'contacted', 'replied', 'rejected', 'filtered_out']
 
+const OUTREACH_STATUS_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'calling', label: 'Calling now' },
+  { value: 'no_answer', label: 'No answer' },
+  { value: 'voicemail', label: 'Voicemail left' },
+  { value: 'call_ended', label: 'Call ended' },
+  { value: 'follow_up', label: 'Follow up needed' },
+  { value: 'qualified', label: 'Qualified' },
+  { value: 'not_interested', label: 'Not interested' },
+  { value: 'do_not_contact', label: 'Do not contact' },
+]
+const OUTREACH_LABEL = new Map(OUTREACH_STATUS_OPTIONS.map((o) => [o.value, o.label]))
+
 const PITCH_STATUS_CLS: Record<string, string> = {
   approved: 'bg-green-100 text-green-800 hover:bg-green-100',
   sent: 'bg-blue-100 text-blue-800 hover:bg-blue-100',
@@ -145,6 +159,18 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
 
   useEffect(() => {
     load()
+    // Fire-and-forget viewed ping. Best-effort; ignore failures so a 401 or
+    // network blip doesn't block the page from rendering.
+    void (async () => {
+      try {
+        const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+        await fetch(`/api/prospects/${id}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ mark_viewed: true }),
+        })
+      } catch {}
+    })()
   }, [id])
 
   async function load() {
@@ -247,6 +273,27 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       setError(e.message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function changeOutreachStatus(newValue: string | null) {
+    if (!detail) return
+    // Optimistic update — flip the badge immediately so the user sees the
+    // click land. Snapshot the prior value so we can revert on failure.
+    const prior = detail.prospect.outreach_status
+    setDetail({
+      ...detail,
+      prospect: { ...detail.prospect, outreach_status: newValue },
+    })
+    setError('')
+    try {
+      await patch({ outreach_status: newValue })
+    } catch (e: any) {
+      // Revert on failure.
+      setDetail((d) =>
+        d ? { ...d, prospect: { ...d.prospect, outreach_status: prior } } : d
+      )
+      setError(e.message)
     }
   }
 
@@ -398,6 +445,36 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
     }
   }
 
+  async function setPhoneManuallyAction(contactId: string, currentPhone: string | null) {
+    const input = window.prompt(
+      currentPhone
+        ? 'Update phone number (or clear to remove):'
+        : 'Enter phone number for this contact (no Lusha credit charged):',
+      currentPhone ?? ''
+    )
+    if (input === null) return
+    const trimmed = input.trim()
+    setPhoneActionId(contactId)
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/prospects/${id}/contacts/${contactId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ phone: trimmed === '' ? null : trimmed }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'set phone failed' }))
+        throw new Error(err.error ?? 'set phone failed')
+      }
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setPhoneActionId(null)
+    }
+  }
+
   async function findDirectLineAction(contactId: string) {
     if (!confirm('Spend 1 Lusha credit to find a direct/mobile line for this contact? For SMB prospects the business phone above is usually the right number — only do this if you genuinely need the decision-maker direct.')) return
     setPhoneActionId(contactId)
@@ -510,6 +587,20 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
             <SelectContent>
               {PROSPECT_STATUSES.map((s) => (
                 <SelectItem key={s} value={s}>{s}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={prospect.outreach_status ?? '__none__'}
+            onValueChange={(v) => changeOutreachStatus(v === '__none__' ? null : v)}
+          >
+            <SelectTrigger size="sm" className="min-w-[150px]">
+              <SelectValue placeholder="Outreach…" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">— no outreach status —</SelectItem>
+              {OUTREACH_STATUS_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -1019,6 +1110,18 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                             {c.phone_source === 'lusha_direct' && (
                               <span className="text-xs text-green-700 font-semibold" title="Direct/mobile line revealed via Lusha">direct</span>
                             )}
+                            {c.phone_source === 'manual' && (
+                              <span className="text-xs text-muted-foreground" title="Entered manually">manual</span>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setPhoneManuallyAction(c.id, c.phone)}
+                              disabled={phoneActionId === c.id}
+                              title="Edit / clear phone manually"
+                            >
+                              Edit
+                            </Button>
                           </span>
                         ) : c.phone_source === 'lusha_direct' ? (
                           <span className="text-xs text-muted-foreground" title="Lusha had no direct line for this contact">
@@ -1045,6 +1148,15 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                               title="Spends 1 Lusha credit — only useful for B2B where the GMB phone routes through a switchboard"
                             >
                               Find direct line
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setPhoneManuallyAction(c.id, null)}
+                              disabled={phoneActionId === c.id}
+                              title="Type a phone number directly — no credit charged"
+                            >
+                              Set manually
                             </Button>
                           </span>
                         ) : (

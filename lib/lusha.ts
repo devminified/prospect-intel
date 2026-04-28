@@ -46,17 +46,19 @@ export async function lushaFindPerson(input: {
     )
   }
 
-  const body: Record<string, unknown> = {}
+  // Lusha v2/person is a BULK endpoint — even a single lookup goes in a
+  // `contacts: [...]` array. firstName/lastName/companies/linkedinUrl all
+  // live inside each contact element, not at top level.
+  const matchEntry: Record<string, unknown> = { contactId: 'lookup' }
   if (input.linkedinUrl) {
-    body.linkedinUrl = input.linkedinUrl
-  } else if (input.firstName && input.lastName && input.domain) {
-    body.firstName = input.firstName
-    body.lastName = input.lastName
-    body.companies = [{ domain: input.domain }]
-  } else if (input.firstName && input.lastName && input.companyName) {
-    body.firstName = input.firstName
-    body.lastName = input.lastName
-    body.companies = [{ name: input.companyName }]
+    matchEntry.linkedinUrl = input.linkedinUrl
+  } else if (input.firstName && input.lastName && (input.domain || input.companyName)) {
+    matchEntry.firstName = input.firstName
+    matchEntry.lastName = input.lastName
+    const companies: Array<Record<string, string>> = []
+    if (input.domain) companies.push({ domain: input.domain })
+    if (input.companyName) companies.push({ name: input.companyName })
+    matchEntry.companies = companies
   } else {
     const missing: string[] = []
     if (!input.linkedinUrl) missing.push('linkedinUrl')
@@ -67,6 +69,7 @@ export async function lushaFindPerson(input: {
       `Lusha can't match this contact — needs LinkedIn URL OR (firstName + lastName + domain/companyName). Missing: ${missing.join(', ')}.`
     )
   }
+  const body = { contacts: [matchEntry] }
 
   const res = await fetch(`${LUSHA_BASE}/v2/person`, {
     method: 'POST',
@@ -85,7 +88,24 @@ export async function lushaFindPerson(input: {
   }
 
   const data = await res.json().catch(() => null)
-  const person = (data as any)?.data ?? data
+  if (!data) return null
+
+  // Bulk response shape (v2/person): { contacts: { <contactId>: { data, error } }, requestId, ... }
+  // Permissive parsing — Lusha has historically reshuffled response keys, so
+  // try a few well-known places before giving up.
+  const contactsBlock = (data as any).contacts ?? null
+  let person: any = null
+  if (contactsBlock && typeof contactsBlock === 'object') {
+    const entry = contactsBlock['lookup'] ?? Object.values(contactsBlock)[0]
+    if (entry && (entry as any).error) {
+      // Lusha returned a per-contact error (typically "no match"). Treat as null match.
+      return null
+    }
+    person = (entry as any)?.data ?? entry ?? null
+  }
+  if (!person) {
+    person = (data as any).data ?? null
+  }
   if (!person) return null
 
   const rawPhones = Array.isArray(person.phoneNumbers) ? person.phoneNumbers : []

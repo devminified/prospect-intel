@@ -3,10 +3,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { supabase } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { authHeaders } from '@/lib/auth-headers'
 import {
   Select,
   SelectContent,
@@ -14,6 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { useLeads, type Lead } from '@/lib/queries/leads'
+import { useCurrentTeam } from '@/lib/queries/team'
 
 interface OutreachState {
   has_pitch: boolean
@@ -22,31 +22,6 @@ interface OutreachState {
   has_reply: boolean
   recommended_channel: 'phone' | 'email' | 'either' | null
   last_activity_at: string | null
-}
-
-interface Lead {
-  id: string
-  name: string
-  status: string
-  outreach_status: string | null
-  last_viewed_at: string | null
-  website: string | null
-  rating: number | null
-  review_count: number | null
-  created_at: string
-  batch_id: string
-  batch_city: string | null
-  batch_category: string | null
-  best_angle: string | null
-  opportunity_score: number | null
-  assigned_to: string | null
-  outreach: OutreachState
-}
-
-interface TeamMember {
-  user_id: string
-  email: string | null
-  role: string
 }
 
 type StageKey = 'all' | 'no_outreach' | 'in_contact' | 'opened' | 'replied' | 'call_phase'
@@ -113,16 +88,17 @@ interface SavedView {
 const SAVED_VIEWS_KEY = 'prospect-intel:saved-views'
 
 export default function LeadsPage() {
-  const [leads, setLeads] = useState<Lead[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const { data: leadsData, isLoading, error } = useLeads()
+  const { data: teamData } = useCurrentTeam()
+  const leads: Lead[] = leadsData ?? []
+  const teamMembers = teamData?.members ?? []
+  const myUserId = teamMembers.find((m) => m.is_self)?.user_id ?? null
 
   const sp = useSearchParams()
   const initialStage = ((sp?.get('stage') as StageKey | null) ?? 'all') as StageKey
   const initialOutreach = sp?.get('outreach') ?? 'any'
   const initialViewed = ((sp?.get('viewed') as ViewedKey | null) ?? 'any') as ViewedKey
   const initialSort = ((sp?.get('sort') as SortKey | null) ?? 'score') as SortKey
-
   const initialAssignee = sp?.get('assignee') ?? 'any'
 
   const [stage, setStage] = useState<StageKey>(initialStage)
@@ -132,144 +108,14 @@ export default function LeadsPage() {
   const [search, setSearch] = useState('')
   const [view, setView] = useState<ViewMode>('list')
   const [assignee, setAssignee] = useState<string>(initialAssignee)
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
-  const [myUserId, setMyUserId] = useState<string | null>(null)
-
   const [savedViews, setSavedViews] = useState<SavedView[]>([])
 
   useEffect(() => {
-    void load()
     try {
       const raw = localStorage.getItem(SAVED_VIEWS_KEY)
       if (raw) setSavedViews(JSON.parse(raw))
     } catch {}
-    void (async () => {
-      try {
-        const headers = await authHeaders()
-        const res = await fetch('/api/team', { headers })
-        if (res.ok) {
-          const json = await res.json()
-          setTeamMembers(json.members ?? [])
-          const me = (json.members ?? []).find((m: any) => m.is_self)
-          if (me) setMyUserId(me.user_id)
-        }
-      } catch {}
-    })()
   }, [])
-
-  async function load() {
-    setLoading(true)
-    setError('')
-
-    // Pull all prospects the user owns via RLS, joined with batch info + analysis.
-    const { data: pData, error: pErr } = await supabase
-      .from('prospects')
-      .select(
-        'id, name, status, outreach_status, last_viewed_at, website, rating, review_count, created_at, batch_id, assigned_to, batches!inner(city, category), analyses(opportunity_score, best_angle)'
-      )
-      .order('created_at', { ascending: false })
-      .limit(1000)
-
-    if (pErr) {
-      setError(`Leads load failed: ${pErr.message}`)
-      setLoading(false)
-      return
-    }
-
-    const prospects = (pData as any[]) ?? []
-    const ids = prospects.map((p) => p.id)
-
-    if (ids.length === 0) {
-      setLeads([])
-      setLoading(false)
-      return
-    }
-
-    const [pitchesRes, recsRes] = await Promise.all([
-      supabase
-        .from('pitches')
-        .select(
-          'prospect_id, sent_emails(id, sent_at, email_opens(opened_at, is_probably_self, is_probably_mpp), email_replies(id, received_at))'
-        )
-        .in('prospect_id', ids),
-      supabase
-        .from('channel_recommendations')
-        .select('prospect_id, recommended_channel')
-        .in('prospect_id', ids),
-    ])
-
-    const stateByProspect = new Map<string, OutreachState>()
-    for (const pitch of (pitchesRes.data as any[]) ?? []) {
-      const sent = (pitch.sent_emails ?? []) as any[]
-      const has_sent = sent.length > 0
-      const has_real_open = sent.some((s) =>
-        (s.email_opens ?? []).some((o: any) => !o.is_probably_self && !o.is_probably_mpp)
-      )
-      const has_reply = sent.some((s) => (s.email_replies ?? []).length > 0)
-
-      // Latest activity timestamp across this prospect's pitched outreach.
-      let latest = 0
-      for (const s of sent) {
-        if (s.sent_at) latest = Math.max(latest, Date.parse(s.sent_at))
-        for (const o of s.email_opens ?? []) {
-          if (o.opened_at) latest = Math.max(latest, Date.parse(o.opened_at))
-        }
-        for (const r of s.email_replies ?? []) {
-          if (r.received_at) latest = Math.max(latest, Date.parse(r.received_at))
-        }
-      }
-
-      stateByProspect.set(pitch.prospect_id, {
-        has_pitch: true,
-        has_sent,
-        has_real_open,
-        has_reply,
-        recommended_channel: null,
-        last_activity_at: latest > 0 ? new Date(latest).toISOString() : null,
-      })
-    }
-    for (const r of (recsRes.data as any[]) ?? []) {
-      const existing = stateByProspect.get(r.prospect_id) ?? {
-        has_pitch: false,
-        has_sent: false,
-        has_real_open: false,
-        has_reply: false,
-        recommended_channel: null as OutreachState['recommended_channel'],
-        last_activity_at: null as string | null,
-      }
-      existing.recommended_channel = r.recommended_channel ?? null
-      stateByProspect.set(r.prospect_id, existing)
-    }
-
-    const merged: Lead[] = prospects.map((p) => ({
-      id: p.id,
-      name: p.name,
-      status: p.status,
-      outreach_status: p.outreach_status ?? null,
-      last_viewed_at: p.last_viewed_at ?? null,
-      website: p.website ?? null,
-      rating: p.rating ?? null,
-      review_count: p.review_count ?? null,
-      created_at: p.created_at,
-      batch_id: p.batch_id,
-      batch_city: p.batches?.city ?? null,
-      batch_category: p.batches?.category ?? null,
-      best_angle: p.analyses?.best_angle ?? null,
-      opportunity_score: p.analyses?.opportunity_score ?? null,
-      assigned_to: p.assigned_to ?? null,
-      outreach: stateByProspect.get(p.id) ?? {
-        has_pitch: false,
-        has_sent: false,
-        has_real_open: false,
-        has_reply: false,
-        recommended_channel: null,
-        last_activity_at: null,
-      },
-    }))
-
-    setLeads(merged)
-    setLoading(false)
-  }
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -372,11 +218,11 @@ export default function LeadsPage() {
     setAssignee('any')
   }
 
-  if (loading) return <div className="text-muted-foreground">Loading leads…</div>
+  if (isLoading) return <div className="text-muted-foreground">Loading leads…</div>
   if (error) {
     return (
       <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-sm">
-        {error}
+        {error.message}
       </div>
     )
   }

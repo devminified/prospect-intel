@@ -8,7 +8,10 @@ import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import { buildIcsEvent, downloadIcs } from '@/lib/ics'
+import { useNotes, type Note } from '@/lib/hooks/use-notes'
+import { useFollowups, type Followup } from '@/lib/hooks/use-followups'
+import { useContactMutations } from '@/lib/hooks/use-contact-mutations'
+import { authHeaders } from '@/lib/auth-headers'
 import {
   Select,
   SelectContent,
@@ -75,22 +78,8 @@ interface SentEmail {
   email_replies: Array<{ received_at: string | null; classification: string | null }>
 }
 
-interface Note {
-  id: string
-  body: string
-  created_at: string
-  updated_at: string | null
-  user_id: string
-}
-
-interface Followup {
-  id: string
-  due_at: string
-  note: string | null
-  done: boolean
-  done_at: string | null
-  created_at: string
-}
+// Note + Followup interfaces are defined in their respective hook modules
+// and imported below; the page just re-uses those shapes.
 
 interface ActivityEvent {
   ts: string
@@ -187,18 +176,29 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   const [copiedAt, setCopiedAt] = useState<string | null>(null)
   const [discovering, setDiscovering] = useState(false)
   const [revealingId, setRevealingId] = useState<string | null>(null)
-  const [phoneActionId, setPhoneActionId] = useState<string | null>(null)
-  const [savingLinkedinId, setSavingLinkedinId] = useState<string | null>(null)
-  const [savingNameId, setSavingNameId] = useState<string | null>(null)
-  const [newNote, setNewNote] = useState('')
-  const [addingNote, setAddingNote] = useState(false)
-  const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
-  const [editingNoteBody, setEditingNoteBody] = useState('')
-  const [savingNote, setSavingNote] = useState(false)
-  const [newFollowupAt, setNewFollowupAt] = useState('')
-  const [newFollowupNote, setNewFollowupNote] = useState('')
-  const [addingFollowup, setAddingFollowup] = useState(false)
-  const [updatingFollowupId, setUpdatingFollowupId] = useState<string | null>(null)
+  // Sub-domain state lives in custom hooks (use-notes / use-followups /
+  // use-contact-mutations). They each own their own pending flags + error
+  // and hand back small APIs of stable functions; the page just reads
+  // them and wires JSX.
+  const notes = useNotes(id, () => void load())
+  const followups = useFollowups(
+    {
+      id,
+      name: detail?.prospect.name ?? '',
+      website: detail?.prospect.website ?? null,
+    },
+    () => void load(),
+    (mutator) =>
+      setDetail((d) => (d ? { ...d, followups: mutator(d.followups) } : d))
+  )
+  const contactMut = useContactMutations(id, () => void load())
+
+  // Bubble hook errors up to the existing page-level banner so the user
+  // sees one consistent error surface.
+  useEffect(() => {
+    const msg = notes.error ?? followups.error ?? contactMut.error
+    if (msg) setError(msg)
+  }, [notes.error, followups.error, contactMut.error])
   const [regenerating, setRegenerating] = useState(false)
   const [recommending, setRecommending] = useState(false)
   const [scriptCopiedAt, setScriptCopiedAt] = useState<string | null>(null)
@@ -295,11 +295,6 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
     setDetail(d)
     setEditedBody(d.pitch?.edited_body ?? d.pitch?.body ?? '')
     setLoading(false)
-  }
-
-  async function authHeaders() {
-    const { data } = await supabase.auth.getSession()
-    return { Authorization: `Bearer ${data.session?.access_token ?? ''}` }
   }
 
   async function patch(body: Record<string, unknown>) {
@@ -424,343 +419,6 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       setError(e.message)
     } finally {
       setRevealingId(null)
-    }
-  }
-
-  async function useBusinessPhoneAction(contactId: string) {
-    setPhoneActionId(contactId)
-    setError('')
-    try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/contacts/${contactId}/use-business-phone`, { method: 'POST', headers })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'use business phone failed' }))
-        throw new Error(err.error ?? 'use business phone failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setPhoneActionId(null)
-    }
-  }
-
-  async function editNameAction(contactId: string, currentFullName: string | null) {
-    const input = window.prompt(
-      'Enter contact name as "First Last" — used by Lusha to match a direct line:',
-      currentFullName ?? ''
-    )
-    if (input === null) return
-    const trimmed = input.trim()
-    if (trimmed === '') {
-      setError('Name cannot be empty')
-      return
-    }
-    const parts = trimmed.split(/\s+/).filter(Boolean)
-    const firstName = parts[0] ?? null
-    const lastName = parts.length > 1 ? parts[parts.length - 1] : null
-    if (!lastName) {
-      const proceed = window.confirm(
-        'Only one word — Lusha needs a last name to match. Proceed anyway?'
-      )
-      if (!proceed) return
-    }
-    setSavingNameId(contactId)
-    setError('')
-    try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/contacts/${contactId}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({
-          first_name: firstName,
-          last_name: lastName,
-          full_name: trimmed,
-        }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'save name failed' }))
-        throw new Error(err.error ?? 'save name failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setSavingNameId(null)
-    }
-  }
-
-  async function setLinkedinAction(contactId: string, currentUrl: string | null) {
-    const input = window.prompt(
-      currentUrl
-        ? 'Update LinkedIn profile URL (or clear to remove):'
-        : 'Paste the LinkedIn profile URL for this contact (Lusha matches against this most reliably):',
-      currentUrl ?? ''
-    )
-    if (input === null) return // cancel
-    const trimmed = input.trim()
-    setSavingLinkedinId(contactId)
-    setError('')
-    try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/contacts/${contactId}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ linkedin_url: trimmed === '' ? null : trimmed }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'save linkedin failed' }))
-        throw new Error(err.error ?? 'save linkedin failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setSavingLinkedinId(null)
-    }
-  }
-
-  async function addNoteAction() {
-    const text = newNote.trim()
-    if (!text) return
-    setAddingNote(true)
-    setError('')
-    try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/notes`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ body: text }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'add note failed' }))
-        throw new Error(err.error ?? 'add note failed')
-      }
-      setNewNote('')
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setAddingNote(false)
-    }
-  }
-
-  function startEditNote(n: Note) {
-    setEditingNoteId(n.id)
-    setEditingNoteBody(n.body)
-  }
-
-  function cancelEditNote() {
-    setEditingNoteId(null)
-    setEditingNoteBody('')
-  }
-
-  async function saveEditNote() {
-    if (!editingNoteId) return
-    const text = editingNoteBody.trim()
-    if (!text) return
-    setSavingNote(true)
-    setError('')
-    try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/notes/${editingNoteId}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ body: text }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'save note failed' }))
-        throw new Error(err.error ?? 'save note failed')
-      }
-      setEditingNoteId(null)
-      setEditingNoteBody('')
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setSavingNote(false)
-    }
-  }
-
-  async function deleteNoteAction(noteId: string) {
-    if (!confirm('Delete this note? This cannot be undone.')) return
-    setError('')
-    try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/notes/${noteId}`, {
-        method: 'DELETE',
-        headers,
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'delete note failed' }))
-        throw new Error(err.error ?? 'delete note failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    }
-  }
-
-  async function addFollowupAction() {
-    if (!newFollowupAt) {
-      setError('Pick a date and time first')
-      return
-    }
-    const dueAt = new Date(newFollowupAt)
-    if (Number.isNaN(dueAt.getTime())) {
-      setError('Invalid date')
-      return
-    }
-    setAddingFollowup(true)
-    setError('')
-    try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/followups`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ due_at: dueAt.toISOString(), note: newFollowupNote.trim() || null }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'add follow-up failed' }))
-        throw new Error(err.error ?? 'add follow-up failed')
-      }
-      setNewFollowupAt('')
-      setNewFollowupNote('')
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setAddingFollowup(false)
-    }
-  }
-
-  async function toggleFollowupDone(f: Followup) {
-    if (!detail) return
-    // Optimistic toggle.
-    const prior = detail.followups
-    setDetail({
-      ...detail,
-      followups: detail.followups.map((x) =>
-        x.id === f.id ? { ...x, done: !f.done, done_at: !f.done ? new Date().toISOString() : null } : x
-      ),
-    })
-    setUpdatingFollowupId(f.id)
-    setError('')
-    try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/followups/${f.id}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ done: !f.done }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'toggle failed' }))
-        throw new Error(err.error ?? 'toggle failed')
-      }
-      await load()
-    } catch (e: any) {
-      setDetail((d) => (d ? { ...d, followups: prior } : d))
-      setError(e.message)
-    } finally {
-      setUpdatingFollowupId(null)
-    }
-  }
-
-  async function deleteFollowupAction(fid: string) {
-    if (!confirm('Delete this follow-up? This cannot be undone.')) return
-    setError('')
-    try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/followups/${fid}`, {
-        method: 'DELETE',
-        headers,
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'delete failed' }))
-        throw new Error(err.error ?? 'delete failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    }
-  }
-
-  function downloadFollowupIcs(f: Followup) {
-    if (!detail) return
-    const due = new Date(f.due_at)
-    if (Number.isNaN(due.getTime())) return
-    const summary = `Follow up: ${detail.prospect.name}`
-    const description = [
-      f.note ?? '',
-      '',
-      `Prospect: ${detail.prospect.name}`,
-      detail.prospect.website ? `Website: ${detail.prospect.website}` : '',
-      typeof window !== 'undefined' ? `Open in app: ${window.location.origin}/prospects/${detail.prospect.id}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n')
-    const url =
-      typeof window !== 'undefined'
-        ? `${window.location.origin}/prospects/${detail.prospect.id}`
-        : undefined
-    const ics = buildIcsEvent({
-      uid: f.id,
-      startUtc: due,
-      durationMinutes: 30,
-      summary,
-      description,
-      url,
-    })
-    const slug = detail.prospect.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'prospect'
-    downloadIcs(ics, `followup-${slug}-${f.id.slice(0, 8)}.ics`)
-  }
-
-  async function setPhoneManuallyAction(contactId: string, currentPhone: string | null) {
-    const input = window.prompt(
-      currentPhone
-        ? 'Update phone number (or clear to remove):'
-        : 'Enter phone number for this contact (no Lusha credit charged):',
-      currentPhone ?? ''
-    )
-    if (input === null) return
-    const trimmed = input.trim()
-    setPhoneActionId(contactId)
-    setError('')
-    try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/contacts/${contactId}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ phone: trimmed === '' ? null : trimmed }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'set phone failed' }))
-        throw new Error(err.error ?? 'set phone failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setPhoneActionId(null)
-    }
-  }
-
-  async function findDirectLineAction(contactId: string) {
-    if (!confirm('Spend 1 Lusha credit to find a direct/mobile line for this contact? For SMB prospects the business phone above is usually the right number — only do this if you genuinely need the decision-maker direct.')) return
-    setPhoneActionId(contactId)
-    setError('')
-    try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/contacts/${contactId}/find-direct-line`, { method: 'POST', headers })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'find direct line failed' }))
-        throw new Error(err.error ?? 'find direct line failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setPhoneActionId(null)
     }
   }
 
@@ -898,15 +556,15 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
           <CardContent className="space-y-3">
             <div className="flex flex-col gap-2">
               <textarea
-                value={newNote}
-                onChange={(e) => setNewNote(e.target.value)}
+                value={notes.newBody}
+                onChange={(e) => notes.setNewBody(e.target.value)}
                 placeholder="Add a note — call notes, follow-up context, anything you want to remember…"
                 rows={3}
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
               <div className="flex justify-end">
-                <Button size="sm" onClick={addNoteAction} disabled={addingNote || !newNote.trim()}>
-                  {addingNote ? 'Adding…' : 'Add note'}
+                <Button size="sm" onClick={notes.add} disabled={notes.pending === 'add' || !notes.newBody.trim()}>
+                  {notes.pending === 'add' ? 'Adding…' : 'Add note'}
                 </Button>
               </div>
             </div>
@@ -915,21 +573,21 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
             ) : (
               <div className="space-y-2">
                 {detail.notes.map((n) => {
-                  const isEditing = editingNoteId === n.id
+                  const isEditing = notes.editingId === n.id
                   return (
                     <div key={n.id} className="rounded-md border bg-muted/30 p-3 text-sm">
                       {isEditing ? (
                         <div className="flex flex-col gap-2">
                           <textarea
-                            value={editingNoteBody}
-                            onChange={(e) => setEditingNoteBody(e.target.value)}
+                            value={notes.editingBody}
+                            onChange={(e) => notes.setEditingBody(e.target.value)}
                             rows={3}
                             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                           />
                           <div className="flex justify-end gap-2">
-                            <Button variant="ghost" size="sm" onClick={cancelEditNote}>Cancel</Button>
-                            <Button size="sm" onClick={saveEditNote} disabled={savingNote || !editingNoteBody.trim()}>
-                              {savingNote ? 'Saving…' : 'Save'}
+                            <Button variant="ghost" size="sm" onClick={notes.cancelEdit}>Cancel</Button>
+                            <Button size="sm" onClick={notes.save} disabled={notes.pending === 'save' || !notes.editingBody.trim()}>
+                              {notes.pending === 'save' ? 'Saving…' : 'Save'}
                             </Button>
                           </div>
                         </div>
@@ -942,8 +600,8 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                               {n.updated_at && ` · edited ${formatRel(n.updated_at)}`}
                             </span>
                             <span className="flex gap-1">
-                              <Button variant="ghost" size="sm" onClick={() => startEditNote(n)}>Edit</Button>
-                              <Button variant="ghost" size="sm" onClick={() => deleteNoteAction(n.id)}>Delete</Button>
+                              <Button variant="ghost" size="sm" onClick={() => notes.startEdit(n)}>Edit</Button>
+                              <Button variant="ghost" size="sm" onClick={() => notes.remove(n.id)}>Delete</Button>
                             </span>
                           </div>
                         </>
@@ -973,20 +631,20 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
             <div className="space-y-2 rounded-md border bg-muted/30 p-3">
               <input
                 type="datetime-local"
-                value={newFollowupAt}
-                onChange={(e) => setNewFollowupAt(e.target.value)}
+                value={followups.newAt}
+                onChange={(e) => followups.setNewAt(e.target.value)}
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
               <input
                 type="text"
                 placeholder="What to do (optional) — e.g. 'Send proposal'"
-                value={newFollowupNote}
-                onChange={(e) => setNewFollowupNote(e.target.value)}
+                value={followups.newNote}
+                onChange={(e) => followups.setNewNote(e.target.value)}
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
               <div className="flex justify-end">
-                <Button size="sm" onClick={addFollowupAction} disabled={addingFollowup || !newFollowupAt}>
-                  {addingFollowup ? 'Adding…' : 'Add follow-up'}
+                <Button size="sm" onClick={followups.add} disabled={followups.pending === 'add' || !followups.newAt}>
+                  {followups.pending === 'add' ? 'Adding…' : 'Add follow-up'}
                 </Button>
               </div>
             </div>
@@ -1010,8 +668,8 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                         <input
                           type="checkbox"
                           checked={f.done}
-                          onChange={() => toggleFollowupDone(f)}
-                          disabled={updatingFollowupId === f.id}
+                          onChange={() => followups.toggleDone(f)}
+                          disabled={followups.pendingId === f.id}
                           className="mt-1 shrink-0"
                           aria-label={f.done ? 'Mark as not done' : 'Mark as done'}
                         />
@@ -1024,11 +682,11 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                           {f.note && <p className="text-muted-foreground whitespace-pre-wrap mt-0.5">{f.note}</p>}
                           <div className="mt-2 flex flex-wrap gap-1">
                             {!f.done && (
-                              <Button variant="ghost" size="sm" onClick={() => downloadFollowupIcs(f)}>
+                              <Button variant="ghost" size="sm" onClick={() => followups.downloadCalendar(f)}>
                                 Add to calendar
                               </Button>
                             )}
-                            <Button variant="ghost" size="sm" onClick={() => deleteFollowupAction(f.id)}>
+                            <Button variant="ghost" size="sm" onClick={() => followups.remove(f.id)}>
                               Delete
                             </Button>
                           </div>
@@ -1513,11 +1171,11 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => editNameAction(c.id, c.full_name)}
-                            disabled={savingNameId === c.id}
+                            onClick={() => contactMut.setName(c.id, c.full_name)}
+                            disabled={(contactMut.pendingId === c.id && contactMut.pendingKind === 'name')}
                             title={c.full_name ? 'Edit name (used by Lusha matcher)' : 'Set name — required for Lusha direct-line matching'}
                           >
-                            {savingNameId === c.id ? 'Saving…' : c.full_name ? 'Edit' : 'Set'}
+                            {(contactMut.pendingId === c.id && contactMut.pendingKind === 'name') ? 'Saving…' : c.full_name ? 'Edit' : 'Set'}
                           </Button>
                         </span>
                       </td>
@@ -1567,8 +1225,8 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => setPhoneManuallyAction(c.id, c.phone)}
-                              disabled={phoneActionId === c.id}
+                              onClick={() => contactMut.setPhoneManually(c.id, c.phone)}
+                              disabled={contactMut.pendingId === c.id}
                               title="Edit / clear phone manually"
                             >
                               Edit
@@ -1584,18 +1242,18 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => useBusinessPhoneAction(c.id)}
-                                disabled={phoneActionId === c.id}
+                                onClick={() => contactMut.useBusinessPhone(c.id)}
+                                disabled={contactMut.pendingId === c.id}
                                 title="Free — uses the business phone from the Google listing"
                               >
-                                {phoneActionId === c.id ? 'Saving…' : 'Use business phone'}
+                                {contactMut.pendingId === c.id ? 'Saving…' : 'Use business phone'}
                               </Button>
                             )}
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => findDirectLineAction(c.id)}
-                              disabled={phoneActionId === c.id}
+                              onClick={() => contactMut.findDirectLine(c.id)}
+                              disabled={contactMut.pendingId === c.id}
                               title="Spends 1 Lusha credit — only useful for B2B where the GMB phone routes through a switchboard"
                             >
                               Find direct line
@@ -1603,8 +1261,8 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => setPhoneManuallyAction(c.id, null)}
-                              disabled={phoneActionId === c.id}
+                              onClick={() => contactMut.setPhoneManually(c.id, null)}
+                              disabled={contactMut.pendingId === c.id}
                               title="Type a phone number directly — no credit charged"
                             >
                               Set manually
@@ -1631,11 +1289,11 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => setLinkedinAction(c.id, c.linkedin_url)}
-                            disabled={savingLinkedinId === c.id}
+                            onClick={() => contactMut.setLinkedin(c.id, c.linkedin_url)}
+                            disabled={(contactMut.pendingId === c.id && contactMut.pendingKind === 'linkedin')}
                             title={c.linkedin_url ? 'Edit LinkedIn URL' : 'Set LinkedIn URL — enables Lusha direct-line matching'}
                           >
-                            {savingLinkedinId === c.id ? 'Saving…' : c.linkedin_url ? 'Edit' : 'Set'}
+                            {(contactMut.pendingId === c.id && contactMut.pendingKind === 'linkedin') ? 'Saving…' : c.linkedin_url ? 'Edit' : 'Set'}
                           </Button>
                         </span>
                       </td>

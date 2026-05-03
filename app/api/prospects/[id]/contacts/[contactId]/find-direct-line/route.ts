@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { findDirectLine } from '@/lib/contacts'
+import { getProspectTeamAccess } from '@/lib/team'
+import { canCreateBatch, type Role, roleForbiddenMessage } from '@/lib/rbac'
 
 export async function POST(
   request: NextRequest,
@@ -19,19 +21,26 @@ export async function POST(
   }
   const userId = userData.user.id
 
-  const { data: contact, error: cErr } = await supabaseAdmin
+  // Validate the contact belongs to a prospect in a team this user is in,
+  // then gate on canCreateBatch — Lusha credits cost money, so spending
+  // them is part of the lead-generation budget like Apollo discovery.
+  const { data: contact } = await supabaseAdmin
     .from('contacts')
-    .select('id, prospect_id, prospects!inner(batches!inner(user_id))')
+    .select('prospect_id')
     .eq('id', contactId)
-    .single()
-  if (cErr || !contact) {
+    .maybeSingle()
+  if (!contact || (contact as any).prospect_id !== prospectId) {
     return NextResponse.json({ error: 'Contact not found' }, { status: 404 })
   }
-  if ((contact as any).prospect_id !== prospectId) {
-    return NextResponse.json({ error: 'Contact does not belong to this prospect' }, { status: 400 })
+  const access = await getProspectTeamAccess(userId, prospectId)
+  if (!access) {
+    return NextResponse.json({ error: 'Prospect not found in your team' }, { status: 404 })
   }
-  if ((contact as any).prospects?.batches?.user_id !== userId) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  if (!canCreateBatch(access.role as Role)) {
+    return NextResponse.json(
+      { error: roleForbiddenMessage(access.role as Role, 'spend Lusha credits to find a direct line') },
+      { status: 403 }
+    )
   }
 
   try {

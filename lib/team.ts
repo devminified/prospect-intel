@@ -33,6 +33,36 @@ export async function resolveUserTeamId(userId: string): Promise<string> {
   return await createPersonalTeam(userId)
 }
 
+/**
+ * Confirms the user is a member of the team that owns the prospect.
+ * Returns the team_id + the user's role on success, or null if the
+ * prospect doesn't exist / belongs to a different team / user isn't a
+ * member. Used by API routes that bypass RLS via supabaseAdmin and
+ * still need to enforce team-scoped access.
+ */
+export async function getProspectTeamAccess(
+  userId: string,
+  prospectId: string
+): Promise<{ teamId: string; role: string } | null> {
+  const { data: prospect } = await supabaseAdmin
+    .from('prospects')
+    .select('batches!inner(team_id)')
+    .eq('id', prospectId)
+    .maybeSingle()
+  const teamId = (prospect as any)?.batches?.team_id
+  if (!teamId) return null
+
+  const { data: membership } = await supabaseAdmin
+    .from('team_members')
+    .select('role')
+    .eq('team_id', teamId)
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (!membership) return null
+
+  return { teamId, role: membership.role }
+}
+
 async function createPersonalTeam(userId: string): Promise<string> {
   const { data: team, error: teamErr } = await supabaseAdmin
     .from('teams')

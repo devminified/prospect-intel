@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { discoverPeople } from '@/lib/contacts'
+import { getProspectTeamAccess } from '@/lib/team'
+import { canCreateBatch, type Role, roleForbiddenMessage } from '@/lib/rbac'
 
 export async function POST(
   request: NextRequest,
@@ -19,18 +21,18 @@ export async function POST(
   }
   const userId = userData.user.id
 
-  // Ownership check: user must own the batch this prospect belongs to
-  const { data: prospect, error: pErr } = await supabaseAdmin
-    .from('prospects')
-    .select('id, batches!inner(user_id)')
-    .eq('id', prospectId)
-    .single()
-  if (pErr || !prospect) {
-    return NextResponse.json({ error: 'Prospect not found' }, { status: 404 })
+  // Team-scoped ownership + role gate. Discovery spends Apollo people-
+  // search quota, so it sits behind canCreateBatch (lead_gen / manager /
+  // owner) — same group that runs the lead-generation pipeline.
+  const access = await getProspectTeamAccess(userId, prospectId)
+  if (!access) {
+    return NextResponse.json({ error: 'Prospect not found in your team' }, { status: 404 })
   }
-  const ownerId = (prospect as any).batches?.user_id
-  if (ownerId !== userId) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  if (!canCreateBatch(access.role as Role)) {
+    return NextResponse.json(
+      { error: roleForbiddenMessage(access.role as Role, 'discover contacts (spends Apollo quota)') },
+      { status: 403 }
+    )
   }
 
   try {

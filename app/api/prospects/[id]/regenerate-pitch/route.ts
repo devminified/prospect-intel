@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { generatePitch } from '@/lib/pitch'
+import { getProspectTeamAccess } from '@/lib/team'
+import { canSendEmail, type Role, roleForbiddenMessage } from '@/lib/rbac'
 
 export const maxDuration = 60
 
@@ -21,17 +23,18 @@ export async function POST(
   }
   const userId = userData.user.id
 
-  const { data: prospect, error: pErr } = await supabaseAdmin
-    .from('prospects')
-    .select('id, batches!inner(user_id)')
-    .eq('id', prospectId)
-    .single()
-  if (pErr || !prospect) {
-    return NextResponse.json({ error: 'Prospect not found' }, { status: 404 })
+  // Pitch belongs to the email-output workflow — gate behind canSendEmail
+  // so closer / manager / owner can iterate, but lead_gen / cold_caller
+  // can't burn Sonnet credits regenerating copy they aren't going to ship.
+  const access = await getProspectTeamAccess(userId, prospectId)
+  if (!access) {
+    return NextResponse.json({ error: 'Prospect not found in your team' }, { status: 404 })
   }
-  const ownerId = (prospect as any).batches?.user_id
-  if (ownerId !== userId) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  if (!canSendEmail(access.role as Role)) {
+    return NextResponse.json(
+      { error: roleForbiddenMessage(access.role as Role, 'regenerate pitch copy') },
+      { status: 403 }
+    )
   }
 
   try {

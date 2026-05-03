@@ -48,15 +48,19 @@ Each layer only depends on layers below it. UI never touches Supabase directly.
 - Each API route becomes < 30 lines: auth, body parse via Zod, delegate to service, return.
 - Standardize the auth + error pattern in one shared helper.
 
-### M57 — TanStack Query migration (heavy pages)
-- `/dashboard`, `/leads`, prospect detail, batch detail.
-- `useQuery` for reads, `useMutation` for writes. Cache invalidation via query keys.
-- Existing `use-notes` / `use-followups` / `use-contact-mutations` rewritten as TanStack mutations.
+### M57 — TanStack Query infrastructure
+- `lib/api-client.ts` — typed `apiGet/apiPost/apiPatch/apiDelete` wrappers around fetch. Replaces ad-hoc `fetch + parse + throw` blocks. Native fetch only — no axios.
+- `lib/queries/keys.ts` — central `queryKeys` factory.
+- `lib/queries/{notes,followups,contacts,prospects,team,prospect-detail}.ts` — `useQuery` for reads, `useMutation` for writes, optimistic patterns where they were already in use, cache invalidation via query keys.
+- No page migrations yet — hooks are ready to consume in M58.
 
-### M58 — Migration finish + cleanup + docs
-- Migrate remaining pages.
-- Remove dead code from old patterns.
-- Update `docs/CONVENTIONS.md` with the new layer rules.
+### M58 — Page migrations
+- Migrate prospect detail (heaviest), `/leads`, `/dashboard`, batch detail to use the M57 hooks.
+- Existing `lib/hooks/use-{notes,followups,contact-mutations}.ts` deleted once their last consumer (prospect detail) switches over.
+
+### M59 — Cleanup + docs
+- Remove any remaining dead code from old patterns.
+- Update `docs/CONVENTIONS.md` with the layer contract.
 - Phase 8 archive doc.
 
 ## Locked decisions (in scope vs explicitly deferred)

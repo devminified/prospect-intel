@@ -137,6 +137,74 @@ export default function TeamSettingsPage() {
     }
   }
 
+  async function removeMember(member: Member) {
+    if (
+      !confirm(
+        `Remove ${member.email ?? 'this member'} from the team?\n\nTheir email account (if connected) will be disconnected. Any leads they were assigned to will become Unassigned.`
+      )
+    )
+      return
+    setError('')
+    try {
+      const headers = await authHeaders()
+      const res = await fetch(`/api/team/members/${member.user_id}`, {
+        method: 'DELETE',
+        headers,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'remove failed' }))
+        throw new Error(err.error ?? 'remove failed')
+      }
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  async function transferOwnership(member: Member) {
+    if (
+      !confirm(
+        `Transfer ownership to ${member.email ?? 'this member'}?\n\nYou will be demoted to Manager. Only the new owner can transfer it back.`
+      )
+    )
+      return
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch('/api/team/transfer-ownership', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ user_id: member.user_id }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'transfer failed' }))
+        throw new Error(err.error ?? 'transfer failed')
+      }
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  async function changeRole(member: Member, newRole: string) {
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/team/members/${member.user_id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ role: newRole }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'role change failed' }))
+        throw new Error(err.error ?? 'role change failed')
+      }
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
   async function revoke(inviteId: string) {
     if (!confirm('Revoke this invite? The recipient will no longer be able to redeem it.')) return
     setError('')
@@ -236,6 +304,7 @@ export default function TeamSettingsPage() {
                 <th className="px-6 py-3">Email</th>
                 <th className="px-6 py-3">Role</th>
                 <th className="px-6 py-3">Joined</th>
+                <th className="px-6 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -250,6 +319,28 @@ export default function TeamSettingsPage() {
                   </td>
                   <td className="px-6 py-3 text-muted-foreground">
                     {new Date(m.joined_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </td>
+                  <td className="px-6 py-3 text-right">
+                    {!m.is_self && m.role !== 'owner' && isOwner && (
+                      <div className="inline-flex flex-wrap items-center justify-end gap-1">
+                        <Select value={m.role} onValueChange={(v) => v && changeRole(m, v)}>
+                          <SelectTrigger size="sm" className="min-w-[140px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {INVITE_ROLES.map((r) => (
+                              <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button variant="ghost" size="sm" onClick={() => transferOwnership(m)}>
+                          Make owner
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => removeMember(m)}>
+                          Remove
+                        </Button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

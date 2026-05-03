@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -107,10 +108,16 @@ export default function LeadsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const [stage, setStage] = useState<StageKey>('all')
-  const [outreach, setOutreach] = useState<string>('any')
-  const [viewed, setViewed] = useState<ViewedKey>('any')
-  const [sort, setSort] = useState<SortKey>('score')
+  const sp = useSearchParams()
+  const initialStage = ((sp?.get('stage') as StageKey | null) ?? 'all') as StageKey
+  const initialOutreach = sp?.get('outreach') ?? 'any'
+  const initialViewed = ((sp?.get('viewed') as ViewedKey | null) ?? 'any') as ViewedKey
+  const initialSort = ((sp?.get('sort') as SortKey | null) ?? 'score') as SortKey
+
+  const [stage, setStage] = useState<StageKey>(initialStage)
+  const [outreach, setOutreach] = useState<string>(initialOutreach)
+  const [viewed, setViewed] = useState<ViewedKey>(initialViewed)
+  const [sort, setSort] = useState<SortKey>(initialSort)
   const [search, setSearch] = useState('')
   const [view, setView] = useState<ViewMode>('list')
 

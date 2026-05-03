@@ -4,6 +4,7 @@ import { plannerPrompt } from '@/lib/prompts'
 import { calendarForCategories } from '@/lib/seasonality'
 import { searchPlaces, filterDuplicatePlaces, filterByIcpFloors } from '@/lib/places'
 import { enqueueJob } from '@/lib/queue'
+import { resolveUserTeamId } from '@/lib/team'
 
 if (!process.env.ANTHROPIC_API_KEY) {
   throw new Error('Missing env.ANTHROPIC_API_KEY')
@@ -215,10 +216,13 @@ export async function generatePlan(userId: string): Promise<string> {
   const result = await callOpus(prompt)
   enforcePlanConstraints(result, icp)
 
+  const teamId = await resolveUserTeamId(userId)
+
   const { data: plan, error: planErr } = await supabaseAdmin
     .from('lead_plans')
     .insert({
       user_id: userId,
+      team_id: teamId,
       plan_date: today,
       status: 'draft',
       rationale_json: { rationale: result.rationale, calendar_used: calendar, today_iso: today },
@@ -338,10 +342,13 @@ async function createBatchForPlanItem(userId: string, city: string, category: st
   const { fresh, skipped: duplicatesSkipped } = await filterDuplicatePlaces(icpFresh)
   const limited = fresh.slice(0, count)
 
+  const teamId = await resolveUserTeamId(userId)
+
   const { data: batch, error: batchErr } = await supabaseAdmin
     .from('batches')
     .insert({
       user_id: userId,
+      team_id: teamId,
       city,
       category,
       count_requested: count,

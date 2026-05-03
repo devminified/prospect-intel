@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { searchPlaces, filterDuplicatePlaces, filterByIcpFloors } from '@/lib/places'
 import { enqueueJob } from '@/lib/queue'
+import { resolveUserTeamId } from '@/lib/team'
 
 interface CreateBatchRequest {
   city: string
@@ -40,10 +41,13 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const teamId = await resolveUserTeamId(userId)
+
     const { data: batch, error: batchError } = await supabaseAdmin
       .from('batches')
       .insert({
         user_id: userId,
+        team_id: teamId,
         city,
         category,
         count_requested: count,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { exchangeCode, getAccountInfo } from '@/lib/email/zoho'
+import { resolveUserTeamId } from '@/lib/team'
 
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get('code')
@@ -30,11 +31,14 @@ export async function GET(request: NextRequest) {
 
     const expiresAt = new Date(Date.now() + (tokens.expires_in - 60) * 1000).toISOString()
 
+    const teamId = await resolveUserTeamId(userId)
+
     const { error: upsertErr } = await supabaseAdmin
       .from('email_accounts')
       .upsert(
         {
           user_id: userId,
+          team_id: teamId,
           provider: 'zoho',
           email: account.primaryEmailAddress,
           display_name: account.displayName,

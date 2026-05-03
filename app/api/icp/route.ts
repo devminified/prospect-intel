@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
+import { resolveUserTeamId } from '@/lib/team'
 
 async function requireUser(request: NextRequest): Promise<string | NextResponse> {
   const authHeader = request.headers.get('authorization')
@@ -40,8 +41,11 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
+  const teamId = await resolveUserTeamId(userId)
+
   const row: any = {
     user_id: userId,
+    team_id: teamId,
     services: Array.isArray(body.services) ? body.services.filter((s: any) => typeof s === 'string' && s.trim()) : [],
     avg_deal_size: body.avg_deal_size != null ? Number(body.avg_deal_size) : null,
     daily_capacity: Math.max(0, Math.min(500, Number(body.daily_capacity ?? 0))),

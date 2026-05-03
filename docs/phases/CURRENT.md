@@ -55,13 +55,21 @@ Each layer only depends on layers below it. UI never touches Supabase directly.
 - No page migrations yet — hooks are ready to consume in M58.
 
 ### M58 — Page migrations
-- Migrate prospect detail (heaviest), `/leads`, `/dashboard`, batch detail to use the M57 hooks.
-- Existing `lib/hooks/use-{notes,followups,contact-mutations}.ts` deleted once their last consumer (prospect detail) switches over.
+- ✓ M58a — `/dashboard` (485 → 295 lines)
+- ✓ M58b — `/leads` (drops load() + manual team fetch)
+- ✓ M58c — `/batches/[id]` (drops load() entirely)
+- M58d — **Prospect detail deferred to Phase 9.** The page (1563 lines) has
+  three interleaved custom-hook bindings (`use-notes`, `use-followups`,
+  `use-contact-mutations`) plus optimistic-update closures over `setDetail`
+  that aren't safely swappable in one milestone. The TanStack hooks exist
+  in `lib/queries/` and are ready to be consumed; what's missing is the
+  step-by-step page rewrite, which earns its own phase.
 
-### M59 — Cleanup + docs
-- Remove any remaining dead code from old patterns.
+### M59 — Cleanup + docs (next)
 - Update `docs/CONVENTIONS.md` with the layer contract.
 - Phase 8 archive doc.
+- Honest note that `lib/hooks/use-{notes,followups,contact-mutations}.ts`
+  remain alive because prospect detail still consumes them.
 
 ## Locked decisions (in scope vs explicitly deferred)
 

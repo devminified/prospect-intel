@@ -74,6 +74,30 @@ interface SentEmail {
   email_replies: Array<{ received_at: string | null; classification: string | null }>
 }
 
+interface Note {
+  id: string
+  body: string
+  created_at: string
+  updated_at: string | null
+  user_id: string
+}
+
+interface ActivityEvent {
+  ts: string
+  icon: string
+  text: string
+  cls?: string
+}
+
+interface SentEmailLite {
+  id: string
+  to_email: string | null
+  sent_at: string | null
+  bounced: boolean | null
+  email_opens: Array<{ opened_at: string; is_probably_mpp: boolean; is_probably_self: boolean }>
+  email_replies: Array<{ received_at: string | null; classification: string | null }>
+}
+
 interface Detail {
   prospect: {
     id: string
@@ -116,6 +140,9 @@ interface Detail {
   audit: Audit | null
   recommendation: Recommendation | null
   sentEmail: SentEmail | null
+  notes: Note[]
+  allSentEmails: SentEmailLite[]
+  prospectCreatedAt: string | null
 }
 
 const PROSPECT_STATUSES = ['new', 'enriched', 'analyzed', 'ready', 'contacted', 'replied', 'rejected', 'filtered_out']
@@ -152,6 +179,11 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   const [phoneActionId, setPhoneActionId] = useState<string | null>(null)
   const [savingLinkedinId, setSavingLinkedinId] = useState<string | null>(null)
   const [savingNameId, setSavingNameId] = useState<string | null>(null)
+  const [newNote, setNewNote] = useState('')
+  const [addingNote, setAddingNote] = useState(false)
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
+  const [editingNoteBody, setEditingNoteBody] = useState('')
+  const [savingNote, setSavingNote] = useState(false)
   const [regenerating, setRegenerating] = useState(false)
   const [recommending, setRecommending] = useState(false)
   const [scriptCopiedAt, setScriptCopiedAt] = useState<string | null>(null)
@@ -187,8 +219,9 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       supabase.from('channel_recommendations').select('phone_fit_score, email_fit_score, recommended_channel, reasoning, phone_script, generated_at').eq('prospect_id', id).maybeSingle(),
     ])
 
-    // Sent emails are loaded separately — keyed by pitch_id since pitch.id is required
+    // Sent emails — fetch all for the activity timeline; the strip uses [0].
     let sentEmail: SentEmail | null = null
+    let allSentEmails: SentEmailLite[] = []
     const pitchId = (pitchRes.data as any)?.id
     if (pitchId) {
       const { data: sent } = await supabase
@@ -196,10 +229,23 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
         .select('id, to_email, sent_at, bounced, bounce_reason, email_opens(opened_at, is_probably_mpp, is_probably_self), email_replies(received_at, classification)')
         .eq('pitch_id', pitchId)
         .order('sent_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      sentEmail = (sent as unknown as SentEmail) ?? null
+      const all = (sent as unknown as SentEmail[]) ?? []
+      sentEmail = all[0] ?? null
+      allSentEmails = all.map((s) => ({
+        id: s.id,
+        to_email: s.to_email,
+        sent_at: s.sent_at,
+        bounced: s.bounced,
+        email_opens: s.email_opens ?? [],
+        email_replies: s.email_replies ?? [],
+      }))
     }
+
+    const { data: notesData } = await supabase
+      .from('prospect_notes')
+      .select('id, body, created_at, updated_at, user_id')
+      .eq('prospect_id', id)
+      .order('created_at', { ascending: false })
 
     if (pRes.error) {
       setError(`Prospect load failed: ${pRes.error.message}`)
@@ -216,6 +262,9 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       audit: (vRes.data as Audit) ?? null,
       recommendation: (rRes.data as Recommendation) ?? null,
       sentEmail,
+      notes: (notesData as Note[]) ?? [],
+      allSentEmails,
+      prospectCreatedAt: (pRes.data as any)?.created_at ?? null,
     }
     setDetail(d)
     setEditedBody(d.pitch?.edited_body ?? d.pitch?.body ?? '')
@@ -445,6 +494,87 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
     }
   }
 
+  async function addNoteAction() {
+    const text = newNote.trim()
+    if (!text) return
+    setAddingNote(true)
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/prospects/${id}/notes`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ body: text }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'add note failed' }))
+        throw new Error(err.error ?? 'add note failed')
+      }
+      setNewNote('')
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setAddingNote(false)
+    }
+  }
+
+  function startEditNote(n: Note) {
+    setEditingNoteId(n.id)
+    setEditingNoteBody(n.body)
+  }
+
+  function cancelEditNote() {
+    setEditingNoteId(null)
+    setEditingNoteBody('')
+  }
+
+  async function saveEditNote() {
+    if (!editingNoteId) return
+    const text = editingNoteBody.trim()
+    if (!text) return
+    setSavingNote(true)
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/prospects/${id}/notes/${editingNoteId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ body: text }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'save note failed' }))
+        throw new Error(err.error ?? 'save note failed')
+      }
+      setEditingNoteId(null)
+      setEditingNoteBody('')
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setSavingNote(false)
+    }
+  }
+
+  async function deleteNoteAction(noteId: string) {
+    if (!confirm('Delete this note? This cannot be undone.')) return
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/prospects/${id}/notes/${noteId}`, {
+        method: 'DELETE',
+        headers,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'delete note failed' }))
+        throw new Error(err.error ?? 'delete note failed')
+      }
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
   async function setPhoneManuallyAction(contactId: string, currentPhone: string | null) {
     const input = window.prompt(
       currentPhone
@@ -618,6 +748,101 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
           <span className="ml-2 text-amber-700">— no pitch was generated. Change your ICP filters to re-include.</span>
         </div>
       )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader className="flex-row items-baseline justify-between">
+            <CardTitle className="text-base">Notes</CardTitle>
+            <span className="text-xs text-muted-foreground">{detail.notes.length} {detail.notes.length === 1 ? 'note' : 'notes'}</span>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-col gap-2">
+              <textarea
+                value={newNote}
+                onChange={(e) => setNewNote(e.target.value)}
+                placeholder="Add a note — call notes, follow-up context, anything you want to remember…"
+                rows={3}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              <div className="flex justify-end">
+                <Button size="sm" onClick={addNoteAction} disabled={addingNote || !newNote.trim()}>
+                  {addingNote ? 'Adding…' : 'Add note'}
+                </Button>
+              </div>
+            </div>
+            {detail.notes.length === 0 ? (
+              <p className="text-sm text-muted-foreground italic">No notes yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {detail.notes.map((n) => {
+                  const isEditing = editingNoteId === n.id
+                  return (
+                    <div key={n.id} className="rounded-md border bg-muted/30 p-3 text-sm">
+                      {isEditing ? (
+                        <div className="flex flex-col gap-2">
+                          <textarea
+                            value={editingNoteBody}
+                            onChange={(e) => setEditingNoteBody(e.target.value)}
+                            rows={3}
+                            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          />
+                          <div className="flex justify-end gap-2">
+                            <Button variant="ghost" size="sm" onClick={cancelEditNote}>Cancel</Button>
+                            <Button size="sm" onClick={saveEditNote} disabled={savingNote || !editingNoteBody.trim()}>
+                              {savingNote ? 'Saving…' : 'Save'}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <p className="whitespace-pre-wrap leading-relaxed">{n.body}</p>
+                          <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                            <span>
+                              {formatRel(n.created_at)}
+                              {n.updated_at && ` · edited ${formatRel(n.updated_at)}`}
+                            </span>
+                            <span className="flex gap-1">
+                              <Button variant="ghost" size="sm" onClick={() => startEditNote(n)}>Edit</Button>
+                              <Button variant="ghost" size="sm" onClick={() => deleteNoteAction(n.id)}>Delete</Button>
+                            </span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Activity</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {(() => {
+              const events = buildActivityFeed(detail)
+              if (events.length === 0) {
+                return <p className="text-sm text-muted-foreground italic">No activity yet.</p>
+              }
+              return (
+                <ol className="relative space-y-3 border-l border-border pl-4">
+                  {events.map((e, i) => (
+                    <li key={i} className="relative">
+                      <span className="absolute -left-[22px] top-1 inline-flex h-4 w-4 items-center justify-center rounded-full bg-background border text-[10px]">
+                        {e.icon}
+                      </span>
+                      <div className={`text-sm ${e.cls ?? ''}`}>{e.text}</div>
+                      <div className="text-xs text-muted-foreground">{formatRel(e.ts)}</div>
+                    </li>
+                  ))}
+                </ol>
+              )
+            })()}
+          </CardContent>
+        </Card>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* LEFT: Signals */}
@@ -1215,6 +1440,73 @@ const SENIORITY_DISPLAY: Record<string, { label: string; cls: string }> = {
   director: { label: 'Director', cls: 'bg-sky-100 text-sky-800 hover:bg-sky-100' },
   manager:  { label: 'Manager',  cls: 'bg-secondary text-secondary-foreground hover:bg-secondary' },
   other:    { label: 'Staff',    cls: 'bg-secondary text-secondary-foreground hover:bg-secondary' },
+}
+
+function formatRel(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const ms = Date.now() - Date.parse(iso)
+  if (Number.isNaN(ms)) return ''
+  if (ms < 0) return 'just now'
+  const min = Math.floor(ms / 60_000)
+  if (min < 1) return 'just now'
+  if (min < 60) return `${min}m ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  const d = Math.floor(hr / 24)
+  if (d < 30) return `${d}d ago`
+  const mo = Math.floor(d / 30)
+  return `${mo}mo ago`
+}
+
+function buildActivityFeed(d: Detail): ActivityEvent[] {
+  const events: ActivityEvent[] = []
+  if (d.prospectCreatedAt) {
+    events.push({
+      ts: d.prospectCreatedAt,
+      icon: '+',
+      text: 'Prospect added to a batch',
+      cls: 'text-muted-foreground',
+    })
+  }
+  for (const n of d.notes) {
+    const preview = n.body.length > 80 ? `${n.body.slice(0, 80).trim()}…` : n.body
+    events.push({
+      ts: n.created_at,
+      icon: '✎',
+      text: `Note: "${preview.replace(/\s+/g, ' ')}"`,
+    })
+  }
+  for (const s of d.allSentEmails) {
+    if (s.sent_at) {
+      events.push({
+        ts: s.sent_at,
+        icon: '→',
+        text: `Email sent${s.to_email ? ` to ${s.to_email}` : ''}${s.bounced ? ' (bounced)' : ''}`,
+        cls: s.bounced ? 'text-destructive' : '',
+      })
+    }
+    for (const o of s.email_opens ?? []) {
+      const flag = o.is_probably_self
+        ? 'self-open'
+        : o.is_probably_mpp
+        ? 'MPP-cached open'
+        : 'opened'
+      const cls = o.is_probably_self || o.is_probably_mpp ? 'text-muted-foreground' : 'text-blue-700'
+      events.push({ ts: o.opened_at, icon: '◉', text: `Email ${flag}`, cls })
+    }
+    for (const r of s.email_replies ?? []) {
+      if (!r.received_at) continue
+      const tag = r.classification ? ` — ${r.classification}` : ''
+      events.push({
+        ts: r.received_at,
+        icon: '↩',
+        text: `Reply received${tag}`,
+        cls: r.classification === 'interested' ? 'text-emerald-700' : '',
+      })
+    }
+  }
+  events.sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))
+  return events
 }
 
 function SeniorityChip({ seniority }: { seniority: string | null }) {

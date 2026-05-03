@@ -1,93 +1,46 @@
 # Current phase
 
-**Active:** Phase 8 — major architecture refactor.
+**Active:** none. Phases 1 → 8 all shipped. Last milestone: M59 on 2026-05-04.
 
-After 7 phases of fast feature growth, the codebase has hit complexity that's slowing further work. Phase 8 splits the monolith into clean layers, adds runtime validation, and replaces ad-hoc state management with managed server-state caching.
-
-**Why now:** the deferred features (DnD kanban, audit log, leave-team self-service, lead auto-redistribution, email-account transfer, deal pipeline, billing) all sit on top of patterns that already creak — multiple useState per page, body validation hand-rolled in every API route, business logic interleaved with HTTP plumbing. Refactoring after one more phase of features = more code to migrate.
-
-**This explicitly violates the original CLAUDE.md §0 #5 ("no fancy abstractions") rule.** Updated in this phase to bless the new architecture.
-
-## Layer model
+The codebase now has a layered architecture (UI → queries → services → db → types) with Zod validation at every boundary and TanStack Query for server state on three of four heavy pages. Prospect detail is the one consumer still on the M41 custom hooks — its TanStack migration is the obvious first thing for Phase 9.
 
 ```
-app/(dashboard)/.../page.tsx     ← UI (client components, JSX, shadcn)
-app/api/.../route.ts             ← HTTP boundary (auth, parse, delegate)
-lib/queries/                     ← TanStack Query hooks (useQuery / useMutation)
-lib/services/                    ← Business logic (compose db + external APIs)
-lib/db/                          ← Supabase queries (typed, no business logic)
-lib/types/                       ← Shared TypeScript types + Zod schemas
-lib/                             ← External vendor clients (lusha, places, zoho)
+plan (Opus, outcome-weighted) → enrich → analyze → pitch
+  → send via Zoho → track opens → detect replies → classify
+  → feed back into tomorrow's plan
+
+  ↓ user-facing layer (Phase 5):
+/dashboard      KPI tiles + today's followups + activity feed
+/leads          cross-batch filter/sort/kanban + saved views + assignee filter
+/prospects/:id  notes + followups + activity timeline + ICS download
+
+  ↓ multi-team (Phases 6+7):
+team management with owner / manager / lead_gen / cold_caller / closer
+per-lead assignment with My-leads / Unassigned filters
+member removal + ownership transfer
+RBAC at API + RLS at DB
+
+  ↓ architecture (Phase 8):
+typed Zod schemas, db / services / queries layers, thin API routes
 ```
 
-Each layer only depends on layers below it. UI never touches Supabase directly.
+## Phase 9 candidates (not prioritized)
 
-## Milestones
+- **Prospect detail TanStack migration** — last page on the legacy custom hooks. See `archive/phase-8-architecture.md` § Carry-forward for the three blockers.
+- **DnD kanban** on `/leads?view=kanban` — drag a card between outreach_status columns to update.
+- **Per-assignment audit log** — track who assigned what and when (separate table, not just current state).
+- **Leave-team self-service** for non-owners.
+- **Auto-redistribute leads on member removal** instead of dumping to Unassigned.
+- **Per-team email_account ownership transfer.**
+- **Deal pipeline** with stage values + close dates. Only if business model warrants.
+- **Billing.**
+- **Test framework** — deferred from Phase 8 explicitly. Revisit when first multi-team customer hits us.
+- **M27 Google Trends/News momentum** — still deferred from Phase 4C; revisit if reply-loop signal plateaus.
 
-### M52 — Foundation (this commit)
-- Install `zod` + `@tanstack/react-query`.
-- Carve `lib/types/`, `lib/db/`, `lib/services/`, `lib/queries/` directories with READMEs.
-- Mount QueryClientProvider in app/layout.tsx.
-- Update CLAUDE.md §0 #5 to permit Zod + TanStack Query.
+When a new phase starts, replace this file's contents with:
+- Goal + why now
+- Milestone list with verification criteria
+- Locked decisions (in scope vs explicitly deferred)
+- Budget expectations
 
-### M53 — Type extraction
-- Move every `interface X` + Detail/Lead/Prospect/etc. shape from pages and routes into `lib/types/*.ts`.
-- Add Zod schemas for every domain type. Use `z.infer<typeof X>` as the canonical TypeScript type.
-
-### M54 — Data layer (`lib/db/`)
-- Move every Supabase query out of pages and API routes into typed `lib/db/<domain>.ts` modules.
-- Each function takes a typed input + returns a typed result. No business logic.
-- Both client (RLS-enforced) + admin (service role) variants where needed.
-
-### M55 — Service layer (`lib/services/`)
-- Move business logic from API routes into `lib/services/`.
-- Services compose `lib/db/` + external vendor clients + RBAC checks.
-- Validate inputs with Zod at the service boundary.
-
-### M56 — API route refactor
-- Each API route becomes < 30 lines: auth, body parse via Zod, delegate to service, return.
-- Standardize the auth + error pattern in one shared helper.
-
-### M57 — TanStack Query infrastructure
-- `lib/api-client.ts` — typed `apiGet/apiPost/apiPatch/apiDelete` wrappers around fetch. Replaces ad-hoc `fetch + parse + throw` blocks. Native fetch only — no axios.
-- `lib/queries/keys.ts` — central `queryKeys` factory.
-- `lib/queries/{notes,followups,contacts,prospects,team,prospect-detail}.ts` — `useQuery` for reads, `useMutation` for writes, optimistic patterns where they were already in use, cache invalidation via query keys.
-- No page migrations yet — hooks are ready to consume in M58.
-
-### M58 — Page migrations
-- ✓ M58a — `/dashboard` (485 → 295 lines)
-- ✓ M58b — `/leads` (drops load() + manual team fetch)
-- ✓ M58c — `/batches/[id]` (drops load() entirely)
-- M58d — **Prospect detail deferred to Phase 9.** The page (1563 lines) has
-  three interleaved custom-hook bindings (`use-notes`, `use-followups`,
-  `use-contact-mutations`) plus optimistic-update closures over `setDetail`
-  that aren't safely swappable in one milestone. The TanStack hooks exist
-  in `lib/queries/` and are ready to be consumed; what's missing is the
-  step-by-step page rewrite, which earns its own phase.
-
-### M59 — Cleanup + docs (next)
-- Update `docs/CONVENTIONS.md` with the layer contract.
-- Phase 8 archive doc.
-- Honest note that `lib/hooks/use-{notes,followups,contact-mutations}.ts`
-  remain alive because prospect detail still consumes them.
-
-## Locked decisions (in scope vs explicitly deferred)
-
-**In scope:**
-- Zod, TanStack Query, layered architecture.
-- Updating CLAUDE.md §0 to permit the above.
-
-**Explicitly out of scope:**
-- React Hook Form (we have ~3 forms; not worth a dep).
-- date-fns / dayjs (current Date.parse + toLocaleString does the job).
-- Test framework (no tests by deliberate MVP choice; revisit post-Phase 8).
-- DI container, event bus, feature flags, RxJS, anything else "while we're at it."
-- Any deferred feature work (kanban, audit log, billing, etc.) — those go into Phase 9+ on the new foundation.
-
-## Budget expectations
-
-- ~1.5 weeks across 7 milestones.
-- No new external API spend.
-- Significant regression risk — full smoke test required after each milestone.
-
-When Phase 8 ships, compress this to ≤ 20 lines, move the full spec to `archive/phase-8-architecture.md`, and reset.
+When the phase ships, compress this file to ≤ 20 lines, move the full spec to `archive/phase-N-<name>.md`, and return this file to the standby state above.

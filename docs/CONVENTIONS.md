@@ -2,6 +2,58 @@
 
 Read before adding code. Every rule exists because we already hit the gap during a past milestone.
 
+## Layered architecture (Phase 8+)
+
+Code lives in named layers. Each layer only depends on layers below it.
+
+```
+app/(dashboard)/.../page.tsx     UI            — JSX, shadcn primitives, useState for form/UI only
+app/api/.../route.ts             HTTP boundary — auth, parse body via Zod, delegate to service
+lib/queries/                     server state  — TanStack Query hooks (useQuery / useMutation)
+lib/services/                    business      — RBAC + Zod validation + composes lib/db + vendors
+lib/db/                          data          — typed Supabase queries, no business logic
+lib/types/                       types         — Zod schemas + z.infer types
+lib/                             vendors       — external API clients (lusha, places, zoho)
+```
+
+**Rules of the layers:**
+
+- **UI never touches Supabase directly.** It calls TanStack hooks from `lib/queries/`.
+- **Hooks never contain business logic.** They wrap `/api/*` calls (via `lib/api-client.ts`).
+- **API routes are thin delegators.** Pattern: `withAuth → service.action(userId, body)`. < 30 lines each.
+- **Services are the only place RBAC + business rules live.** Throw `DomainError` subclasses; `withAuth` maps them to HTTP statuses.
+- **db functions assume valid input.** They validate FK existence at most. Business validation lives in services.
+- **types are the single source of truth.** A Zod schema + a `z.infer` derived TypeScript type. Use `Schema.parse()` at every boundary.
+
+**Cross-layer imports allowed:**
+
+- `app/api/*` → `lib/services/*` only (never imports from `lib/db/*` directly).
+- `lib/services/*` → `lib/db/*`, `lib/types/*`, `lib/{lusha,places,...}.ts`, `lib/rbac.ts`, `lib/team.ts`.
+- `lib/db/*` → `lib/types/*`, `lib/supabase/*`.
+- `lib/queries/*` → `lib/api-client.ts`, `lib/types/*`.
+- `lib/types/*` → only `zod`.
+
+Anything else is a layering violation. If you find yourself wanting one, ask first.
+
+## Allowed libraries
+
+Updated by Phase 8. Adding any library not on this list requires updating CLAUDE.md §0 #5 + a phase note.
+
+- `@supabase/supabase-js` (db + auth)
+- `@anthropic-ai/sdk` (LLM calls)
+- `cheerio` (HTML parsing)
+- `next` + `react` + `react-dom`
+- `zod` (validation at every boundary)
+- `@tanstack/react-query` (server state)
+- `shadcn/ui` (Base UI + Tailwind)
+- `sonner` (toasts)
+- `lucide-react` (icons)
+- `class-variance-authority`, `clsx`, `tailwind-merge` (className helpers)
+
+NOT allowed without explicit reauthorization: axios, lodash, date-fns, dayjs, RxJS, Redux, Zustand, Jotai, react-hook-form, yup/joi/io-ts, or any DI container / event bus / ORM.
+
+
+
 ## Naming
 
 | Artifact | Pattern | Example |

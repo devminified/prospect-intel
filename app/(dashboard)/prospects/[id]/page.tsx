@@ -8,6 +8,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
+import { buildIcsEvent, downloadIcs } from '@/lib/ics'
 import {
   Select,
   SelectContent,
@@ -82,6 +83,15 @@ interface Note {
   user_id: string
 }
 
+interface Followup {
+  id: string
+  due_at: string
+  note: string | null
+  done: boolean
+  done_at: string | null
+  created_at: string
+}
+
 interface ActivityEvent {
   ts: string
   icon: string
@@ -141,6 +151,7 @@ interface Detail {
   recommendation: Recommendation | null
   sentEmail: SentEmail | null
   notes: Note[]
+  followups: Followup[]
   allSentEmails: SentEmailLite[]
   prospectCreatedAt: string | null
 }
@@ -184,6 +195,10 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
   const [editingNoteBody, setEditingNoteBody] = useState('')
   const [savingNote, setSavingNote] = useState(false)
+  const [newFollowupAt, setNewFollowupAt] = useState('')
+  const [newFollowupNote, setNewFollowupNote] = useState('')
+  const [addingFollowup, setAddingFollowup] = useState(false)
+  const [updatingFollowupId, setUpdatingFollowupId] = useState<string | null>(null)
   const [regenerating, setRegenerating] = useState(false)
   const [recommending, setRecommending] = useState(false)
   const [scriptCopiedAt, setScriptCopiedAt] = useState<string | null>(null)
@@ -241,11 +256,21 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       }))
     }
 
-    const { data: notesData } = await supabase
-      .from('prospect_notes')
-      .select('id, body, created_at, updated_at, user_id')
-      .eq('prospect_id', id)
-      .order('created_at', { ascending: false })
+    const [notesRes, followupsRes] = await Promise.all([
+      supabase
+        .from('prospect_notes')
+        .select('id, body, created_at, updated_at, user_id')
+        .eq('prospect_id', id)
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('prospect_followups')
+        .select('id, due_at, note, done, done_at, created_at')
+        .eq('prospect_id', id)
+        .order('done', { ascending: true })
+        .order('due_at', { ascending: true }),
+    ])
+    const notesData = notesRes.data
+    const followupsData = followupsRes.data
 
     if (pRes.error) {
       setError(`Prospect load failed: ${pRes.error.message}`)
@@ -263,6 +288,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       recommendation: (rRes.data as Recommendation) ?? null,
       sentEmail,
       notes: (notesData as Note[]) ?? [],
+      followups: (followupsData as Followup[]) ?? [],
       allSentEmails,
       prospectCreatedAt: (pRes.data as any)?.created_at ?? null,
     }
@@ -575,6 +601,120 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
     }
   }
 
+  async function addFollowupAction() {
+    if (!newFollowupAt) {
+      setError('Pick a date and time first')
+      return
+    }
+    const dueAt = new Date(newFollowupAt)
+    if (Number.isNaN(dueAt.getTime())) {
+      setError('Invalid date')
+      return
+    }
+    setAddingFollowup(true)
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/prospects/${id}/followups`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ due_at: dueAt.toISOString(), note: newFollowupNote.trim() || null }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'add follow-up failed' }))
+        throw new Error(err.error ?? 'add follow-up failed')
+      }
+      setNewFollowupAt('')
+      setNewFollowupNote('')
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setAddingFollowup(false)
+    }
+  }
+
+  async function toggleFollowupDone(f: Followup) {
+    if (!detail) return
+    // Optimistic toggle.
+    const prior = detail.followups
+    setDetail({
+      ...detail,
+      followups: detail.followups.map((x) =>
+        x.id === f.id ? { ...x, done: !f.done, done_at: !f.done ? new Date().toISOString() : null } : x
+      ),
+    })
+    setUpdatingFollowupId(f.id)
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/prospects/${id}/followups/${f.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ done: !f.done }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'toggle failed' }))
+        throw new Error(err.error ?? 'toggle failed')
+      }
+      await load()
+    } catch (e: any) {
+      setDetail((d) => (d ? { ...d, followups: prior } : d))
+      setError(e.message)
+    } finally {
+      setUpdatingFollowupId(null)
+    }
+  }
+
+  async function deleteFollowupAction(fid: string) {
+    if (!confirm('Delete this follow-up? This cannot be undone.')) return
+    setError('')
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
+      const res = await fetch(`/api/prospects/${id}/followups/${fid}`, {
+        method: 'DELETE',
+        headers,
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'delete failed' }))
+        throw new Error(err.error ?? 'delete failed')
+      }
+      await load()
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  function downloadFollowupIcs(f: Followup) {
+    if (!detail) return
+    const due = new Date(f.due_at)
+    if (Number.isNaN(due.getTime())) return
+    const summary = `Follow up: ${detail.prospect.name}`
+    const description = [
+      f.note ?? '',
+      '',
+      `Prospect: ${detail.prospect.name}`,
+      detail.prospect.website ? `Website: ${detail.prospect.website}` : '',
+      typeof window !== 'undefined' ? `Open in app: ${window.location.origin}/prospects/${detail.prospect.id}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n')
+    const url =
+      typeof window !== 'undefined'
+        ? `${window.location.origin}/prospects/${detail.prospect.id}`
+        : undefined
+    const ics = buildIcsEvent({
+      uid: f.id,
+      startUtc: due,
+      durationMinutes: 30,
+      summary,
+      description,
+      url,
+    })
+    const slug = detail.prospect.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'prospect'
+    downloadIcs(ics, `followup-${slug}-${f.id.slice(0, 8)}.ics`)
+  }
+
   async function setPhoneManuallyAction(contactId: string, currentPhone: string | null) {
     const input = window.prompt(
       currentPhone
@@ -749,7 +889,7 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card>
           <CardHeader className="flex-row items-baseline justify-between">
             <CardTitle className="text-base">Notes</CardTitle>
@@ -808,6 +948,92 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
                           </div>
                         </>
                       )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex-row items-baseline justify-between">
+            <CardTitle className="text-base">Follow-ups</CardTitle>
+            {(() => {
+              const active = detail.followups.filter((f) => !f.done)
+              const overdue = active.filter((f) => Date.parse(f.due_at) < Date.now()).length
+              return (
+                <span className="text-xs text-muted-foreground">
+                  {active.length} active{overdue > 0 ? ` · ${overdue} overdue` : ''}
+                </span>
+              )
+            })()}
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+              <input
+                type="datetime-local"
+                value={newFollowupAt}
+                onChange={(e) => setNewFollowupAt(e.target.value)}
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              <input
+                type="text"
+                placeholder="What to do (optional) — e.g. 'Send proposal'"
+                value={newFollowupNote}
+                onChange={(e) => setNewFollowupNote(e.target.value)}
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              <div className="flex justify-end">
+                <Button size="sm" onClick={addFollowupAction} disabled={addingFollowup || !newFollowupAt}>
+                  {addingFollowup ? 'Adding…' : 'Add follow-up'}
+                </Button>
+              </div>
+            </div>
+            {detail.followups.length === 0 ? (
+              <p className="text-sm text-muted-foreground italic">No follow-ups scheduled.</p>
+            ) : (
+              <div className="space-y-2">
+                {detail.followups.map((f) => {
+                  const due = Date.parse(f.due_at)
+                  const overdue = !f.done && due < Date.now()
+                  const dueToday = !f.done && !overdue && due - Date.now() < 24 * 60 * 60 * 1000
+                  const dueLabel = formatDue(f.due_at)
+                  return (
+                    <div
+                      key={f.id}
+                      className={`rounded-md border p-3 text-sm ${
+                        f.done ? 'opacity-60' : overdue ? 'border-destructive/40 bg-destructive/5' : dueToday ? 'border-blue-300 bg-blue-50' : 'bg-background'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={f.done}
+                          onChange={() => toggleFollowupDone(f)}
+                          disabled={updatingFollowupId === f.id}
+                          className="mt-1 shrink-0"
+                          aria-label={f.done ? 'Mark as not done' : 'Mark as done'}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className={`font-medium ${f.done ? 'line-through' : ''}`}>
+                            {dueLabel}
+                            {overdue && <span className="ml-2 text-xs text-destructive font-semibold">overdue</span>}
+                            {dueToday && <span className="ml-2 text-xs text-blue-700 font-semibold">today</span>}
+                          </div>
+                          {f.note && <p className="text-muted-foreground whitespace-pre-wrap mt-0.5">{f.note}</p>}
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {!f.done && (
+                              <Button variant="ghost" size="sm" onClick={() => downloadFollowupIcs(f)}>
+                                Add to calendar
+                              </Button>
+                            )}
+                            <Button variant="ghost" size="sm" onClick={() => deleteFollowupAction(f.id)}>
+                              Delete
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   )
                 })}
@@ -1442,6 +1668,28 @@ const SENIORITY_DISPLAY: Record<string, { label: string; cls: string }> = {
   other:    { label: 'Staff',    cls: 'bg-secondary text-secondary-foreground hover:bg-secondary' },
 }
 
+function formatDue(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const now = new Date()
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (sameDay) return `Today · ${time}`
+  const tomorrow = new Date(now)
+  tomorrow.setDate(now.getDate() + 1)
+  if (
+    d.getFullYear() === tomorrow.getFullYear() &&
+    d.getMonth() === tomorrow.getMonth() &&
+    d.getDate() === tomorrow.getDate()
+  ) {
+    return `Tomorrow · ${time}`
+  }
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + ` · ${time}`
+}
+
 function formatRel(iso: string | null | undefined): string {
   if (!iso) return ''
   const ms = Date.now() - Date.parse(iso)
@@ -1475,6 +1723,22 @@ function buildActivityFeed(d: Detail): ActivityEvent[] {
       icon: '✎',
       text: `Note: "${preview.replace(/\s+/g, ' ')}"`,
     })
+  }
+  for (const f of d.followups) {
+    const noteSnippet = f.note ? ` — "${f.note.length > 60 ? `${f.note.slice(0, 60).trim()}…` : f.note}"` : ''
+    events.push({
+      ts: f.created_at,
+      icon: '⏰',
+      text: `Follow-up scheduled for ${formatDue(f.due_at)}${noteSnippet}`,
+    })
+    if (f.done && f.done_at) {
+      events.push({
+        ts: f.done_at,
+        icon: '✓',
+        text: `Follow-up completed${noteSnippet}`,
+        cls: 'text-emerald-700',
+      })
+    }
   }
   for (const s of d.allSentEmails) {
     if (s.sent_at) {

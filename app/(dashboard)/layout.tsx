@@ -15,6 +15,7 @@ const NAV = [
   { href: '/batches', label: 'Batches' },
   { href: '/settings/icp', label: 'ICP' },
   { href: '/settings/email', label: 'Email' },
+  { href: '/settings/team', label: 'Team' },
 ]
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

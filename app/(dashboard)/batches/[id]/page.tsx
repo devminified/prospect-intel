@@ -1,11 +1,12 @@
 'use client'
 
-import { use, useEffect, useState } from 'react'
+import { use, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { useBatchDetail, type BatchProspect as Prospect } from '@/lib/queries/batch-detail'
 
 interface OutreachState {
   has_pitch: boolean
@@ -13,21 +14,6 @@ interface OutreachState {
   has_real_open: boolean
   has_reply: boolean
   recommended_channel: 'phone' | 'email' | 'either' | null
-}
-
-interface Prospect {
-  id: string
-  name: string
-  status: string
-  website: string | null
-  rating: number | null
-  review_count: number | null
-  outreach_status: string | null
-  last_viewed_at: string | null
-  analyses: { opportunity_score: number | null; best_angle: string | null } | null
-  last_error?: string | null
-  failed_stage?: string | null
-  outreach: OutreachState
 }
 
 const OUTREACH_LABEL: Record<string, string> = {
@@ -64,143 +50,21 @@ function matchesFilter(p: Prospect, key: FilterKey): boolean {
   }
 }
 
-interface Batch {
-  id: string
-  city: string
-  category: string
-  count_requested: number
-  count_completed: number
-  count_filtered_below_icp: number
-  count_duplicates_skipped: number
-  status: string
-}
-
 export default function BatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
-  const [batch, setBatch] = useState<Batch | null>(null)
-  const [prospects, setProspects] = useState<Prospect[]>([])
+  const { data, isLoading, error } = useBatchDetail(id)
   const [filter, setFilter] = useState<FilterKey>('all')
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [exportError, setExportError] = useState('')
 
-  useEffect(() => {
-    load()
-  }, [id])
-
-  async function load() {
-    setLoading(true)
-    setError('')
-
-    const { data: b, error: bErr } = await supabase
-      .from('batches')
-      .select('id, city, category, count_requested, count_completed, count_filtered_below_icp, count_duplicates_skipped, status')
-      .eq('id', id)
-      .single()
-    if (bErr) {
-      setError(`Batch load failed: ${bErr.message}`)
-      setLoading(false)
-      return
-    }
-    setBatch(b as Batch)
-
-    const { data: p, error: pErr } = await supabase
-      .from('prospects')
-      .select('id, name, status, website, rating, review_count, outreach_status, last_viewed_at, analyses(opportunity_score, best_angle)')
-      .eq('batch_id', id)
-    if (pErr) {
-      setError(`Prospects load failed: ${pErr.message}`)
-      setLoading(false)
-      return
-    }
-
-    const prospectIds = ((p as unknown as { id: string }[]) ?? []).map((x) => x.id)
-
-    // Fetch outreach signals + failed jobs in parallel.
-    const [failedJobsRes, pitchesRes, recsRes] = await Promise.all([
-      supabase
-        .from('jobs')
-        .select('prospect_id, job_type, last_error, status')
-        .eq('batch_id', id)
-        .eq('status', 'failed'),
-      prospectIds.length === 0
-        ? Promise.resolve({ data: [] as any[] })
-        : supabase
-            .from('pitches')
-            .select('prospect_id, sent_emails(id, email_opens(is_probably_self, is_probably_mpp), email_replies(id))')
-            .in('prospect_id', prospectIds),
-      prospectIds.length === 0
-        ? Promise.resolve({ data: [] as any[] })
-        : supabase
-            .from('channel_recommendations')
-            .select('prospect_id, recommended_channel')
-            .in('prospect_id', prospectIds),
-    ])
-
-    const errorByProspect = new Map<string, { stage: string; message: string }>()
-    for (const j of (failedJobsRes.data as any[]) ?? []) {
-      if (j.last_error) {
-        errorByProspect.set(j.prospect_id, { stage: j.job_type, message: j.last_error })
-      }
-    }
-
-    const stateByProspect = new Map<string, OutreachState>()
-    for (const pitch of (pitchesRes.data as any[]) ?? []) {
-      const sent = (pitch.sent_emails ?? []) as any[]
-      const has_sent = sent.length > 0
-      const has_real_open = sent.some((s) =>
-        (s.email_opens ?? []).some((o: any) => !o.is_probably_self && !o.is_probably_mpp)
-      )
-      const has_reply = sent.some((s) => (s.email_replies ?? []).length > 0)
-      stateByProspect.set(pitch.prospect_id, {
-        has_pitch: true,
-        has_sent,
-        has_real_open,
-        has_reply,
-        recommended_channel: null,
-      })
-    }
-    for (const r of (recsRes.data as any[]) ?? []) {
-      const existing = stateByProspect.get(r.prospect_id) ?? {
-        has_pitch: false,
-        has_sent: false,
-        has_real_open: false,
-        has_reply: false,
-        recommended_channel: null as OutreachState['recommended_channel'],
-      }
-      existing.recommended_channel = r.recommended_channel ?? null
-      stateByProspect.set(r.prospect_id, existing)
-    }
-
-    const decorated = ((p as unknown as Prospect[]) ?? []).map((x) => {
-      const err = errorByProspect.get(x.id)
-      const outreach = stateByProspect.get(x.id) ?? {
-        has_pitch: false,
-        has_sent: false,
-        has_real_open: false,
-        has_reply: false,
-        recommended_channel: null as OutreachState['recommended_channel'],
-      }
-      return {
-        ...x,
-        outreach,
-        ...(err ? { failed_stage: err.stage, last_error: err.message } : {}),
-      }
-    })
-    const sorted = decorated.sort((a, b) => {
-      const sa = a.analyses?.opportunity_score ?? -1
-      const sb = b.analyses?.opportunity_score ?? -1
-      return sb - sa
-    })
-    setProspects(sorted)
-    setLoading(false)
-  }
+  const batch = data?.batch ?? null
+  const prospects = data?.prospects ?? []
 
   async function exportCsv() {
-    setError('')
+    setExportError('')
     const { data: sessionData } = await supabase.auth.getSession()
     const token = sessionData.session?.access_token
     if (!token) {
-      setError('Not signed in')
+      setExportError('Not signed in')
       return
     }
     const res = await fetch(`/api/pitches/export?batch_id=${id}`, {
@@ -208,7 +72,7 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
     })
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: 'export failed' }))
-      setError(body.error ?? 'export failed')
+      setExportError(body.error ?? 'export failed')
       return
     }
     const blob = await res.blob()
@@ -225,8 +89,8 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
     URL.revokeObjectURL(url)
   }
 
-  if (loading) return <div className="text-muted-foreground">Loading…</div>
-  if (error && !batch) return <div className="text-destructive">{error}</div>
+  if (isLoading) return <div className="text-muted-foreground">Loading…</div>
+  if (error) return <div className="text-destructive">{error.message}</div>
   if (!batch) return <div className="text-muted-foreground">Batch not found.</div>
 
   return (
@@ -254,8 +118,8 @@ export default function BatchDetailPage({ params }: { params: Promise<{ id: stri
           </div>
           <Button onClick={exportCsv}>Export approved CSV</Button>
         </div>
-        {error && (
-          <div className="mt-3 p-3 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-sm">{error}</div>
+        {exportError && (
+          <div className="mt-3 p-3 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-sm">{exportError}</div>
         )}
       </div>
 

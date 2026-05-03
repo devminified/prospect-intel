@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase/server'
 import { searchPlaces, filterDuplicatePlaces, filterByIcpFloors } from '@/lib/places'
 import { enqueueJob } from '@/lib/queue'
 import { resolveUserTeamId } from '@/lib/team'
+import { canCreateBatch, getUserRole, roleForbiddenMessage } from '@/lib/rbac'
 
 interface CreateBatchRequest {
   city: string
@@ -42,6 +43,13 @@ export async function POST(request: NextRequest) {
     }
 
     const teamId = await resolveUserTeamId(userId)
+    const role = await getUserRole(userId, teamId)
+    if (!canCreateBatch(role)) {
+      return NextResponse.json(
+        { error: roleForbiddenMessage(role, 'create a batch') },
+        { status: 403 }
+      )
+    }
 
     const { data: batch, error: batchError } = await supabaseAdmin
       .from('batches')

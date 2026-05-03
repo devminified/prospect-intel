@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { refreshAccessToken, sendMessage } from '@/lib/email/zoho'
 import { buildEmailHtml, b64url } from '@/lib/email/templates'
+import { resolveUserTeamId } from '@/lib/team'
+import { canSendEmail, getUserRole, roleForbiddenMessage } from '@/lib/rbac'
 
 const MIN_SEND_SPACING_MS = 30_000
 
@@ -23,6 +25,15 @@ export async function POST(
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
   const userId = userData.user.id
+
+  const teamId = await resolveUserTeamId(userId)
+  const role = await getUserRole(userId, teamId)
+  if (!canSendEmail(role)) {
+    return NextResponse.json(
+      { error: roleForbiddenMessage(role, 'send cold-outreach emails') },
+      { status: 403 }
+    )
+  }
 
   // 2. Load pitch + ownership check + contact + business email
   const { data: pitch, error: pitchErr } = await supabaseAdmin

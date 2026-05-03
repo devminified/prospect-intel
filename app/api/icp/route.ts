@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { resolveUserTeamId } from '@/lib/team'
+import { canEditIcp, getUserRole, roleForbiddenMessage } from '@/lib/rbac'
 
 async function requireUser(request: NextRequest): Promise<string | NextResponse> {
   const authHeader = request.headers.get('authorization')
@@ -42,6 +43,13 @@ export async function PATCH(request: NextRequest) {
   }
 
   const teamId = await resolveUserTeamId(userId)
+  const role = await getUserRole(userId, teamId)
+  if (!canEditIcp(role)) {
+    return NextResponse.json(
+      { error: roleForbiddenMessage(role, 'edit ICP') },
+      { status: 403 }
+    )
+  }
 
   const row: any = {
     user_id: userId,

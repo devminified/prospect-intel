@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
+import { resolveUserTeamId } from '@/lib/team'
+import { canSetOutreachStatus, getUserRole, roleForbiddenMessage } from '@/lib/rbac'
 
 const ALLOWED_PROSPECT_STATUSES = ['new', 'enriched', 'analyzed', 'ready', 'contacted', 'replied', 'rejected']
 const ALLOWED_PITCH_STATUSES = ['draft', 'approved', 'sent', 'replied']
@@ -60,6 +62,14 @@ export async function PATCH(
   }
 
   if (body.outreach_status !== undefined) {
+    const teamId = await resolveUserTeamId(userId)
+    const role = await getUserRole(userId, teamId)
+    if (!canSetOutreachStatus(role)) {
+      return NextResponse.json(
+        { error: roleForbiddenMessage(role, 'change outreach status') },
+        { status: 403 }
+      )
+    }
     if (body.outreach_status === null || body.outreach_status === '') {
       const { error } = await supabaseAdmin
         .from('prospects')

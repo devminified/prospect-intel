@@ -10,7 +10,7 @@ Root spec for contributors (human or AI). Live rules here; detail in `docs/`.
 2. **Ship the MVP, not the dream.** If a feature isn't in the current phase spec (`docs/phases/CURRENT.md`), don't build it. If tempted, stop and ask.
 3. **Work incrementally.** Build in the order the current phase spec gives. Don't jump ahead. After each milestone, run the app and verify it works before moving on.
 4. **Ask before assuming.** If an API key, env var, or business decision is missing, stop and ask. Don't invent credentials or mock services that pretend to work.
-5. **No fancy abstractions.** Plain functions in `lib/`. Plain API routes. Plain SQL. Supabase client + fetch + Cheerio + Anthropic SDK + shadcn primitives. That's it. No DI containers, no custom ORMs, no event buses, no LangChain.
+5. **Layered architecture (Phase 8+).** Code lives in named layers — UI → queries → services → db → types. Each layer only depends on layers below it. UI never touches Supabase directly; routes are thin delegators to services. Allowed libraries: Supabase client, fetch, Cheerio, Anthropic SDK, shadcn primitives, **Zod** (validation at every boundary), **TanStack Query** (server state). Still NO DI containers, custom ORMs, event buses, LangChain, ORMs other than the Supabase client, RxJS, or anything else not in this list. Adding a new library requires updating this rule + a phase note explaining why. See `docs/CONVENTIONS.md` for the layer contract.
 6. **Deploy early, deploy often.** Every milestone ends with a green Vercel deploy.
 7. **No speculative features.** No "might be useful later" code. Delete it.
 8. **Respect the budget.** Every added library, page, or table earns its place.

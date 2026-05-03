@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { GlobalErrorToast } from "@/components/global-error-toast";
+import { QueryProvider } from "@/components/query-provider";
 import "./globals.css";
 
 const inter = Inter({
@@ -30,9 +31,11 @@ export default function RootLayout({
       className={`${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        {children}
-        <GlobalErrorToast />
-        <Toaster />
+        <QueryProvider>
+          {children}
+          <GlobalErrorToast />
+          <Toaster />
+        </QueryProvider>
       </body>
     </html>
   );

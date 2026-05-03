@@ -1459,6 +1459,24 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@tanstack/query-core@npm:5.100.9":
+  version: 5.100.9
+  resolution: "@tanstack/query-core@npm:5.100.9"
+  checksum: 10c0/119bcfa78f416562d64d6584c9354a0f6eec030818a1010428d4fbe8a8599075b3e45cacca09b166726aea9a159b09c5d24a5a0f55581f43cda007a48b5b4414
+  languageName: node
+  linkType: hard
+
+"@tanstack/react-query@npm:^5.100.9":
+  version: 5.100.9
+  resolution: "@tanstack/react-query@npm:5.100.9"
+  dependencies:
+    "@tanstack/query-core": "npm:5.100.9"
+  peerDependencies:
+    react: ^18 || ^19
+  checksum: 10c0/7e9af3334f6eada6fd0e030d19d77f62a2809d91a991caec68811e1e86aef9c93b8cb8fecfcf7efd9517fb1148f0df60fc4103d44cdd38accba991e70b6bb138
+  languageName: node
+  linkType: hard
+
 "@ts-morph/common@npm:~0.27.0":
   version: 0.27.0
   resolution: "@ts-morph/common@npm:0.27.0"
@@ -5587,6 +5605,7 @@ __metadata:
     "@base-ui/react": "npm:^1.4.1"
     "@supabase/supabase-js": "npm:^2.104.0"
     "@tailwindcss/postcss": "npm:^4"
+    "@tanstack/react-query": "npm:^5.100.9"
     "@types/cheerio": "npm:^1.0.0"
     "@types/node": "npm:^20"
     "@types/react": "npm:^19"
@@ -5606,6 +5625,7 @@ __metadata:
     tailwindcss: "npm:^4"
     tw-animate-css: "npm:^1.4.0"
     typescript: "npm:^5"
+    zod: "npm:^4.4.2"
   languageName: unknown
   linkType: soft
 
@@ -7132,5 +7152,12 @@ __metadata:
   version: 4.3.6
   resolution: "zod@npm:4.3.6"
   checksum: 10c0/860d25a81ab41d33aa25f8d0d07b091a04acb426e605f396227a796e9e800c44723ed96d0f53a512b57be3d1520f45bf69c0cb3b378a232a00787a2609625307
+  languageName: node
+  linkType: hard
+
+"zod@npm:^4.4.2":
+  version: 4.4.2
+  resolution: "zod@npm:4.4.2"
+  checksum: 10c0/aa5097464c41cf22d715cbc29873ae6feaaf56e687b81d140458d7c01201e7b9de1ee46c8567b5458ee3c0068b8a82b2652535b5d39589fcb5562d861c83ded3
   languageName: node
   linkType: hard

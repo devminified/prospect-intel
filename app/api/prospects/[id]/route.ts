@@ -22,6 +22,7 @@ interface PatchBody {
   pitch_status?: string
   outreach_status?: string | null
   mark_viewed?: boolean
+  assigned_to?: string | null
 }
 
 export async function PATCH(
@@ -59,6 +60,64 @@ export async function PATCH(
     body = await request.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+  }
+
+  if (body.assigned_to !== undefined) {
+    const teamId = await resolveUserTeamId(userId)
+    const role = await getUserRole(userId, teamId)
+    const targetUserId = body.assigned_to
+
+    // Verify the prospect belongs to the current user's team. RLS already
+    // gates ownership at SELECT, but PATCH goes through supabaseAdmin —
+    // re-check here so we can return a clean 403 with explanation.
+    const { data: prospectRow } = await supabaseAdmin
+      .from('prospects')
+      .select('batch_id, batches!inner(team_id)')
+      .eq('id', prospectId)
+      .single()
+    const prospectTeamId = (prospectRow as any)?.batches?.team_id
+    if (prospectTeamId !== teamId) {
+      return NextResponse.json({ error: 'Prospect not in your team' }, { status: 403 })
+    }
+
+    if (targetUserId === null || targetUserId === '') {
+      // Unassign — any team member can do this.
+      const { error } = await supabaseAdmin
+        .from('prospects')
+        .update({ assigned_to: null, assigned_at: null })
+        .eq('id', prospectId)
+      if (error) {
+        return NextResponse.json({ error: `Unassign failed: ${error.message}` }, { status: 500 })
+      }
+    } else if (typeof targetUserId === 'string') {
+      const isSelfAssign = targetUserId === userId
+      // Self-assign is open to any team member; assigning others requires owner/manager.
+      if (!isSelfAssign && role !== 'owner' && role !== 'manager') {
+        return NextResponse.json(
+          { error: roleForbiddenMessage(role, 'assign leads to other members (only self-assignment allowed)') },
+          { status: 403 }
+        )
+      }
+      // Verify target is a member of the same team.
+      const { data: targetMembership } = await supabaseAdmin
+        .from('team_members')
+        .select('user_id')
+        .eq('team_id', teamId)
+        .eq('user_id', targetUserId)
+        .maybeSingle()
+      if (!targetMembership) {
+        return NextResponse.json({ error: 'Target user is not a member of your team' }, { status: 400 })
+      }
+      const { error } = await supabaseAdmin
+        .from('prospects')
+        .update({ assigned_to: targetUserId, assigned_at: new Date().toISOString() })
+        .eq('id', prospectId)
+      if (error) {
+        return NextResponse.json({ error: `Assign failed: ${error.message}` }, { status: 500 })
+      }
+    } else {
+      return NextResponse.json({ error: 'assigned_to must be a user id or null' }, { status: 400 })
+    }
   }
 
   if (body.outreach_status !== undefined) {

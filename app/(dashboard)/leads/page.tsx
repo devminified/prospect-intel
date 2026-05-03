@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { authHeaders } from '@/lib/auth-headers'
 import {
   Select,
   SelectContent,
@@ -38,7 +39,14 @@ interface Lead {
   batch_category: string | null
   best_angle: string | null
   opportunity_score: number | null
+  assigned_to: string | null
   outreach: OutreachState
+}
+
+interface TeamMember {
+  user_id: string
+  email: string | null
+  role: string
 }
 
 type StageKey = 'all' | 'no_outreach' | 'in_contact' | 'opened' | 'replied' | 'call_phase'
@@ -99,6 +107,7 @@ interface SavedView {
   sort: SortKey
   search: string
   view: ViewMode
+  assignee?: string
 }
 
 const SAVED_VIEWS_KEY = 'prospect-intel:saved-views'
@@ -114,12 +123,17 @@ export default function LeadsPage() {
   const initialViewed = ((sp?.get('viewed') as ViewedKey | null) ?? 'any') as ViewedKey
   const initialSort = ((sp?.get('sort') as SortKey | null) ?? 'score') as SortKey
 
+  const initialAssignee = sp?.get('assignee') ?? 'any'
+
   const [stage, setStage] = useState<StageKey>(initialStage)
   const [outreach, setOutreach] = useState<string>(initialOutreach)
   const [viewed, setViewed] = useState<ViewedKey>(initialViewed)
   const [sort, setSort] = useState<SortKey>(initialSort)
   const [search, setSearch] = useState('')
   const [view, setView] = useState<ViewMode>('list')
+  const [assignee, setAssignee] = useState<string>(initialAssignee)
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
+  const [myUserId, setMyUserId] = useState<string | null>(null)
 
   const [savedViews, setSavedViews] = useState<SavedView[]>([])
 
@@ -129,6 +143,18 @@ export default function LeadsPage() {
       const raw = localStorage.getItem(SAVED_VIEWS_KEY)
       if (raw) setSavedViews(JSON.parse(raw))
     } catch {}
+    void (async () => {
+      try {
+        const headers = await authHeaders()
+        const res = await fetch('/api/team', { headers })
+        if (res.ok) {
+          const json = await res.json()
+          setTeamMembers(json.members ?? [])
+          const me = (json.members ?? []).find((m: any) => m.is_self)
+          if (me) setMyUserId(me.user_id)
+        }
+      } catch {}
+    })()
   }, [])
 
   async function load() {
@@ -139,7 +165,7 @@ export default function LeadsPage() {
     const { data: pData, error: pErr } = await supabase
       .from('prospects')
       .select(
-        'id, name, status, outreach_status, last_viewed_at, website, rating, review_count, created_at, batch_id, batches!inner(city, category), analyses(opportunity_score, best_angle)'
+        'id, name, status, outreach_status, last_viewed_at, website, rating, review_count, created_at, batch_id, assigned_to, batches!inner(city, category), analyses(opportunity_score, best_angle)'
       )
       .order('created_at', { ascending: false })
       .limit(1000)
@@ -230,6 +256,7 @@ export default function LeadsPage() {
       batch_category: p.batches?.category ?? null,
       best_angle: p.analyses?.best_angle ?? null,
       opportunity_score: p.analyses?.opportunity_score ?? null,
+      assigned_to: p.assigned_to ?? null,
       outreach: stateByProspect.get(p.id) ?? {
         has_pitch: false,
         has_sent: false,
@@ -255,6 +282,13 @@ export default function LeadsPage() {
       }
       if (viewed === 'viewed' && !l.last_viewed_at) return false
       if (viewed === 'unviewed' && l.last_viewed_at) return false
+      if (assignee !== 'any') {
+        if (assignee === '__unassigned__') {
+          if (l.assigned_to) return false
+        } else if (assignee === '__me__') {
+          if (l.assigned_to !== myUserId) return false
+        } else if (l.assigned_to !== assignee) return false
+      }
       if (q) {
         const name = (l.name ?? '').toLowerCase()
         const site = (l.website ?? '').toLowerCase()
@@ -266,7 +300,7 @@ export default function LeadsPage() {
       }
       return true
     })
-  }, [leads, stage, outreach, viewed, search])
+  }, [leads, stage, outreach, viewed, search, assignee, myUserId])
 
   const sorted = useMemo(() => {
     const s = [...filtered]
@@ -305,12 +339,13 @@ export default function LeadsPage() {
     setSort(v.sort)
     setSearch(v.search)
     setView(v.view)
+    setAssignee(v.assignee ?? 'any')
   }
 
   function saveCurrentView() {
     const name = window.prompt('Name this view (e.g. "My follow-ups"):')
     if (!name || !name.trim()) return
-    const v: SavedView = { name: name.trim(), stage, outreach, viewed, sort, search, view }
+    const v: SavedView = { name: name.trim(), stage, outreach, viewed, sort, search, view, assignee }
     const next = [...savedViews.filter((x) => x.name !== v.name), v]
     setSavedViews(next)
     try {
@@ -334,6 +369,7 @@ export default function LeadsPage() {
     setSort('score')
     setSearch('')
     setView('list')
+    setAssignee('any')
   }
 
   if (loading) return <div className="text-muted-foreground">Loading leads…</div>
@@ -389,6 +425,23 @@ export default function LeadsPage() {
                 <SelectItem value="any">Any viewed state</SelectItem>
                 <SelectItem value="unviewed">Unviewed only</SelectItem>
                 <SelectItem value="viewed">Viewed only</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={assignee} onValueChange={(v) => v && setAssignee(v)}>
+              <SelectTrigger size="sm" className="min-w-[170px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="any">Any assignee</SelectItem>
+                {myUserId && <SelectItem value="__me__">My leads</SelectItem>}
+                <SelectItem value="__unassigned__">Unassigned</SelectItem>
+                {teamMembers
+                  .filter((m) => m.user_id !== myUserId)
+                  .map((m) => (
+                    <SelectItem key={m.user_id} value={m.user_id}>
+                      {m.email ?? m.user_id.slice(0, 8)}
+                    </SelectItem>
+                  ))}
               </SelectContent>
             </Select>
             <Select value={sort} onValueChange={(v) => v && setSort(v as SortKey)}>

@@ -104,6 +104,8 @@ interface Detail {
     batch_id: string
     status: string
     outreach_status: string | null
+    assigned_to: string | null
+    assigned_at: string | null
     last_viewed_at: string | null
     website: string | null
     address: string | null
@@ -192,6 +194,40 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
       setDetail((d) => (d ? { ...d, followups: mutator(d.followups) } : d))
   )
   const contactMut = useContactMutations(id, () => void load())
+  const [teamMembers, setTeamMembers] = useState<Array<{ user_id: string; email: string | null; role: string }>>([])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const headers = await authHeaders()
+        const res = await fetch('/api/team', { headers })
+        if (res.ok) {
+          const json = await res.json()
+          setTeamMembers(json.members ?? [])
+        }
+      } catch {}
+    })()
+  }, [])
+
+  async function changeAssignee(targetUserId: string | null) {
+    if (!detail) return
+    const prior = { assigned_to: detail.prospect.assigned_to, assigned_at: detail.prospect.assigned_at }
+    setDetail({
+      ...detail,
+      prospect: {
+        ...detail.prospect,
+        assigned_to: targetUserId,
+        assigned_at: targetUserId ? new Date().toISOString() : null,
+      },
+    })
+    setError('')
+    try {
+      await patch({ assigned_to: targetUserId })
+    } catch (e: any) {
+      setDetail((d) => (d ? { ...d, prospect: { ...d.prospect, ...prior } } : d))
+      setError(e.message)
+    }
+  }
 
   // Bubble hook errors up to the existing page-level banner so the user
   // sees one consistent error surface.
@@ -529,6 +565,22 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
               <SelectItem value="__none__">— no outreach status —</SelectItem>
               {OUTREACH_STATUS_OPTIONS.map((o) => (
                 <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={prospect.assigned_to ?? '__unassigned__'}
+            onValueChange={(v) => changeAssignee(v === '__unassigned__' ? null : v)}
+          >
+            <SelectTrigger size="sm" className="min-w-[170px]">
+              <SelectValue placeholder="Assign…" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__unassigned__">— unassigned —</SelectItem>
+              {teamMembers.map((m) => (
+                <SelectItem key={m.user_id} value={m.user_id}>
+                  {m.email ?? m.user_id.slice(0, 8)} ({m.role})
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -1372,6 +1424,14 @@ function buildActivityFeed(d: Detail): ActivityEvent[] {
       icon: '+',
       text: 'Prospect added to a batch',
       cls: 'text-muted-foreground',
+    })
+  }
+  if (d.prospect.assigned_to && d.prospect.assigned_at) {
+    events.push({
+      ts: d.prospect.assigned_at,
+      icon: '◎',
+      text: `Assigned to a team member`,
+      cls: 'text-purple-700',
     })
   }
   for (const n of d.notes) {

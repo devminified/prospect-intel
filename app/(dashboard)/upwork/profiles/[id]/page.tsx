@@ -162,29 +162,41 @@ export default function UpworkProfileDetailPage({
         </div>
       )}
 
-      <div className="flex flex-wrap gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         <Link
           href={`/upwork/profiles/${profile.id}/proposals`}
-          className="rounded-md border bg-background px-4 py-3 text-sm hover:bg-muted/50 transition-colors flex-1 min-w-[200px]"
+          className="rounded-md border bg-background px-4 py-3 text-sm hover:bg-muted/50 transition-colors"
         >
           <div className="font-medium">Proposals →</div>
-          <p className="text-xs text-muted-foreground mt-0.5">Bids sent from this profile + status</p>
+          <p className="text-xs text-muted-foreground mt-0.5">Bids + status</p>
+        </Link>
+        <Link
+          href={`/upwork/profiles/${profile.id}/conversations`}
+          className="rounded-md border bg-background px-4 py-3 text-sm hover:bg-muted/50 transition-colors"
+        >
+          <div className="font-medium">Conversations →</div>
+          <p className="text-xs text-muted-foreground mt-0.5">Threads with clients</p>
+        </Link>
+        <Link
+          href={`/upwork/profiles/${profile.id}/contracts`}
+          className="rounded-md border bg-background px-4 py-3 text-sm hover:bg-muted/50 transition-colors"
+        >
+          <div className="font-medium">Contracts →</div>
+          <p className="text-xs text-muted-foreground mt-0.5">Active engagements</p>
         </Link>
         <Link
           href={`/upwork/profiles/${profile.id}/connects`}
-          className="rounded-md border bg-background px-4 py-3 text-sm hover:bg-muted/50 transition-colors flex-1 min-w-[200px]"
+          className="rounded-md border bg-background px-4 py-3 text-sm hover:bg-muted/50 transition-colors"
         >
           <div className="font-medium">Connects ledger →</div>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {profile.connects_balance} Connects · purchases, spends, refunds
-          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">{profile.connects_balance} Connects</p>
         </Link>
         <Link
           href="/upwork/jobs"
-          className="rounded-md border bg-background px-4 py-3 text-sm hover:bg-muted/50 transition-colors flex-1 min-w-[200px]"
+          className="rounded-md border bg-background px-4 py-3 text-sm hover:bg-muted/50 transition-colors"
         >
           <div className="font-medium">Find a job →</div>
-          <p className="text-xs text-muted-foreground mt-0.5">Browse team-saved jobs and bid</p>
+          <p className="text-xs text-muted-foreground mt-0.5">Team-saved jobs</p>
         </Link>
       </div>
 

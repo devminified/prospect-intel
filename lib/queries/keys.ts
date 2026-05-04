@@ -51,5 +51,11 @@ export const queryKeys = {
     proposal: (id: string) => ['upwork', 'proposal', id] as const,
     connectsForProfile: (profileId: string) =>
       ['upwork', 'profile', profileId, 'connects'] as const,
+    conversations: (profileId: string, status: string | null) =>
+      ['upwork', 'profile', profileId, 'conversations', status ?? 'any'] as const,
+    conversation: (id: string) => ['upwork', 'conversation', id] as const,
+    contracts: (profileId: string, status: string | null) =>
+      ['upwork', 'profile', profileId, 'contracts', status ?? 'any'] as const,
+    contract: (id: string) => ['upwork', 'contract', id] as const,
   },
 } as const

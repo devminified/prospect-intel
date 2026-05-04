@@ -16,14 +16,18 @@ export function useNotes(prospectId: string) {
   })
 }
 
+function invalidateAfterNoteChange(qc: ReturnType<typeof useQueryClient>, prospectId: string) {
+  qc.invalidateQueries({ queryKey: queryKeys.notes.byProspect(prospectId) })
+  qc.invalidateQueries({ queryKey: queryKeys.prospectActivity(prospectId) })
+  // Aggregate detail query embeds notes for the prospect detail page.
+  qc.invalidateQueries({ queryKey: queryKeys.prospect(prospectId) })
+}
+
 export function useAddNote(prospectId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: string) => apiPost<void>(`/api/prospects/${prospectId}/notes`, { body }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.notes.byProspect(prospectId) })
-      qc.invalidateQueries({ queryKey: queryKeys.prospectActivity(prospectId) })
-    },
+    onSuccess: () => invalidateAfterNoteChange(qc, prospectId),
   })
 }
 
@@ -32,9 +36,7 @@ export function useEditNote(prospectId: string) {
   return useMutation({
     mutationFn: ({ noteId, body }: { noteId: string; body: string }) =>
       apiPatch<void>(`/api/prospects/${prospectId}/notes/${noteId}`, { body }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.notes.byProspect(prospectId) })
-    },
+    onSuccess: () => invalidateAfterNoteChange(qc, prospectId),
   })
 }
 
@@ -42,8 +44,6 @@ export function useDeleteNote(prospectId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (noteId: string) => apiDelete<void>(`/api/prospects/${prospectId}/notes/${noteId}`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.notes.byProspect(prospectId) })
-    },
+    onSuccess: () => invalidateAfterNoteChange(qc, prospectId),
   })
 }

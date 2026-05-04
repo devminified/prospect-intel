@@ -2,7 +2,7 @@
 
 import { use, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { supabase } from '@/lib/supabase/client'
+import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -11,7 +11,17 @@ import { Separator } from '@/components/ui/separator'
 import { useNotes } from '@/lib/hooks/use-notes'
 import { useFollowups } from '@/lib/hooks/use-followups'
 import { useContactMutations } from '@/lib/hooks/use-contact-mutations'
-import { authHeaders } from '@/lib/auth-headers'
+import {
+  useDiscoverContacts,
+  usePatchProspect,
+  useProspectDetail,
+  useRecommendChannel,
+  useRegeneratePitch,
+  useRevealContactEmail,
+  useSendPitch,
+} from '@/lib/queries/prospect-detail'
+import { useCurrentTeam } from '@/lib/queries/team'
+import { queryKeys } from '@/lib/queries/keys'
 import {
   Select,
   SelectContent,
@@ -54,274 +64,153 @@ const PITCH_STATUS_CLS: Record<string, string> = {
 
 export default function ProspectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
-  const [detail, setDetail] = useState<Detail | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const qc = useQueryClient()
+  const detailQ = useProspectDetail(id)
+  const detail = detailQ.data ?? null
+
+  const patchMut = usePatchProspect(id)
+  const discoverMut = useDiscoverContacts(id)
+  const regenMut = useRegeneratePitch(id)
+  const revealMut = useRevealContactEmail(id)
+  const recommendMut = useRecommendChannel(id)
+  const sendMut = useSendPitch(id)
+
+  const teamQ = useCurrentTeam()
+  const teamMembers = teamQ.data?.members ?? []
+
+  // Page-level UI state — pitch-body draft, copy/save toasts, error
+  // banner — anything not server-state.
   const [editedBody, setEditedBody] = useState('')
-  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
   const [savedAt, setSavedAt] = useState<string | null>(null)
   const [copiedAt, setCopiedAt] = useState<string | null>(null)
-  const [discovering, setDiscovering] = useState(false)
+  const [scriptCopiedAt, setScriptCopiedAt] = useState<string | null>(null)
   const [revealingId, setRevealingId] = useState<string | null>(null)
-  // Sub-domain state lives in custom hooks (use-notes / use-followups /
-  // use-contact-mutations). They each own their own pending flags + error
-  // and hand back small APIs of stable functions; the page just reads
-  // them and wires JSX.
-  const notes = useNotes(id, () => void load())
-  const followups = useFollowups(
-    {
-      id,
-      name: detail?.prospect.name ?? '',
-      website: detail?.prospect.website ?? null,
-    },
-    () => void load(),
-    (mutator) =>
-      setDetail((d) => (d ? { ...d, followups: mutator(d.followups) } : d))
-  )
-  const contactMut = useContactMutations(id, () => void load())
-  const [teamMembers, setTeamMembers] = useState<Array<{ user_id: string; email: string | null; role: string }>>([])
 
+  const notes = useNotes(id)
+  const followups = useFollowups({
+    id,
+    name: detail?.prospect.name ?? '',
+    website: detail?.prospect.website ?? null,
+  })
+  const contactMut = useContactMutations(id)
+
+  // Sync local editedBody when the server returns a (possibly new) pitch
+  // body. Using a key the user wouldn't otherwise type into avoids
+  // clobbering an in-progress edit.
   useEffect(() => {
-    void (async () => {
-      try {
-        const headers = await authHeaders()
-        const res = await fetch('/api/team', { headers })
-        if (res.ok) {
-          const json = await res.json()
-          setTeamMembers(json.members ?? [])
-        }
-      } catch {}
-    })()
-  }, [])
+    if (detail?.pitch) {
+      setEditedBody(detail.pitch.edited_body ?? detail.pitch.body ?? '')
+    }
+  }, [detail?.pitch?.id, detail?.pitch?.body, detail?.pitch?.edited_body])
 
-  async function changeAssignee(targetUserId: string | null) {
-    if (!detail) return
-    const prior = { assigned_to: detail.prospect.assigned_to, assigned_at: detail.prospect.assigned_at }
-    setDetail({
-      ...detail,
-      prospect: {
-        ...detail.prospect,
+  // Bubble sub-domain hook errors + load errors into one banner.
+  useEffect(() => {
+    const msg = notes.error ?? followups.error ?? contactMut.error ?? null
+    if (msg) setError(msg)
+  }, [notes.error, followups.error, contactMut.error])
+  useEffect(() => {
+    if (detailQ.error) setError(detailQ.error.message)
+  }, [detailQ.error])
+
+  // Fire-and-forget viewed ping on first mount per prospect. Best-effort;
+  // ignore failures so a 401 / network blip doesn't block the page.
+  useEffect(() => {
+    void patchMut.mutateAsync({ mark_viewed: true }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
+
+  /**
+   * Optimistic prospect-row patch. Flips the cached aggregate immediately
+   * so the user sees the click land, then PATCHes; on failure restores
+   * the previous cache. Used for both assignee and outreach-status.
+   */
+  async function patchProspectOptimistically(
+    next: Partial<Detail['prospect']>,
+    body: Record<string, unknown>
+  ) {
+    const key = queryKeys.prospect(id)
+    const prior = qc.getQueryData<Detail>(key)
+    if (prior) {
+      qc.setQueryData<Detail>(key, {
+        ...prior,
+        prospect: { ...prior.prospect, ...next },
+      })
+    }
+    setError('')
+    try {
+      await patchMut.mutateAsync(body)
+    } catch (e) {
+      if (prior) qc.setQueryData<Detail>(key, prior)
+      setError(e instanceof Error ? e.message : 'request failed')
+    }
+  }
+
+  function changeAssignee(targetUserId: string | null) {
+    return patchProspectOptimistically(
+      {
         assigned_to: targetUserId,
         assigned_at: targetUserId ? new Date().toISOString() : null,
       },
-    })
+      { assigned_to: targetUserId }
+    )
+  }
+
+  function changeOutreachStatus(newValue: string | null) {
+    return patchProspectOptimistically(
+      { outreach_status: newValue },
+      { outreach_status: newValue }
+    )
+  }
+
+  async function changeStatus(newStatus: string) {
     setError('')
     try {
-      await patch({ assigned_to: targetUserId })
-    } catch (e: any) {
-      setDetail((d) => (d ? { ...d, prospect: { ...d.prospect, ...prior } } : d))
-      setError(e.message)
-    }
-  }
-
-  // Bubble hook errors up to the existing page-level banner so the user
-  // sees one consistent error surface.
-  useEffect(() => {
-    const msg = notes.error ?? followups.error ?? contactMut.error
-    if (msg) setError(msg)
-  }, [notes.error, followups.error, contactMut.error])
-  const [regenerating, setRegenerating] = useState(false)
-  const [recommending, setRecommending] = useState(false)
-  const [scriptCopiedAt, setScriptCopiedAt] = useState<string | null>(null)
-  const [sending, setSending] = useState(false)
-
-  useEffect(() => {
-    load()
-    // Fire-and-forget viewed ping. Best-effort; ignore failures so a 401 or
-    // network blip doesn't block the page from rendering.
-    void (async () => {
-      try {
-        const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-        await fetch(`/api/prospects/${id}`, {
-          method: 'PATCH',
-          headers,
-          body: JSON.stringify({ mark_viewed: true }),
-        })
-      } catch {}
-    })()
-  }, [id])
-
-  async function load() {
-    setLoading(true)
-    setError('')
-
-    const [pRes, eRes, aRes, pitchRes, cRes, vRes, rRes] = await Promise.all([
-      supabase.from('prospects').select('*').eq('id', id).single(),
-      supabase.from('enrichments').select('*').eq('prospect_id', id).maybeSingle(),
-      supabase.from('analyses').select('*').eq('prospect_id', id).maybeSingle(),
-      supabase.from('pitches').select('id, subject, body, edited_body, status').eq('prospect_id', id).maybeSingle(),
-      supabase.from('contacts').select('id, full_name, title, seniority, department, email, email_confidence, phone, phone_source, linkedin_url, is_primary').eq('prospect_id', id),
-      supabase.from('visibility_audits').select('*').eq('prospect_id', id).maybeSingle(),
-      supabase.from('channel_recommendations').select('phone_fit_score, email_fit_score, recommended_channel, reasoning, phone_script, generated_at').eq('prospect_id', id).maybeSingle(),
-    ])
-
-    // Sent emails — fetch all for the activity timeline; the strip uses [0].
-    let sentEmail: SentEmail | null = null
-    let allSentEmails: SentEmailLite[] = []
-    const pitchId = (pitchRes.data as any)?.id
-    if (pitchId) {
-      const { data: sent } = await supabase
-        .from('sent_emails')
-        .select('id, to_email, sent_at, bounced, bounce_reason, email_opens(opened_at, is_probably_mpp, is_probably_self), email_replies(received_at, classification)')
-        .eq('pitch_id', pitchId)
-        .order('sent_at', { ascending: false })
-      const all = (sent as unknown as SentEmail[]) ?? []
-      sentEmail = all[0] ?? null
-      allSentEmails = all.map((s) => ({
-        id: s.id,
-        to_email: s.to_email,
-        sent_at: s.sent_at,
-        bounced: s.bounced,
-        email_opens: s.email_opens ?? [],
-        email_replies: s.email_replies ?? [],
-      }))
-    }
-
-    const [notesRes, followupsRes] = await Promise.all([
-      supabase
-        .from('prospect_notes')
-        .select('id, body, created_at, updated_at, user_id')
-        .eq('prospect_id', id)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('prospect_followups')
-        .select('id, due_at, note, done, done_at, created_at')
-        .eq('prospect_id', id)
-        .order('done', { ascending: true })
-        .order('due_at', { ascending: true }),
-    ])
-    const notesData = notesRes.data
-    const followupsData = followupsRes.data
-
-    if (pRes.error) {
-      setError(`Prospect load failed: ${pRes.error.message}`)
-      setLoading(false)
-      return
-    }
-
-    const d: Detail = {
-      prospect: pRes.data as any,
-      enrichment: (eRes.data as any) ?? null,
-      analysis: (aRes.data as any) ?? null,
-      pitch: (pitchRes.data as any) ?? null,
-      contacts: (cRes.data as Contact[]) ?? [],
-      audit: (vRes.data as Audit) ?? null,
-      recommendation: (rRes.data as Recommendation) ?? null,
-      sentEmail,
-      notes: (notesData as Note[]) ?? [],
-      followups: (followupsData as Followup[]) ?? [],
-      allSentEmails,
-      prospectCreatedAt: (pRes.data as any)?.created_at ?? null,
-    }
-    setDetail(d)
-    setEditedBody(d.pitch?.edited_body ?? d.pitch?.body ?? '')
-    setLoading(false)
-  }
-
-  async function patch(body: Record<string, unknown>) {
-    const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-    const res = await fetch(`/api/prospects/${id}`, { method: 'PATCH', headers, body: JSON.stringify(body) })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'request failed' }))
-      throw new Error(err.error ?? 'request failed')
+      await patchMut.mutateAsync({ prospect_status: newStatus })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'request failed')
     }
   }
 
   async function saveEdit() {
-    setSaving(true)
     setError('')
     try {
-      await patch({ pitch_edited_body: editedBody })
+      await patchMut.mutateAsync({ pitch_edited_body: editedBody })
       setSavedAt(new Date().toLocaleTimeString())
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setSaving(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'save failed')
     }
   }
 
   async function approve() {
-    setSaving(true)
     setError('')
     try {
-      await patch({ pitch_edited_body: editedBody, pitch_status: 'approved' })
-      await load()
+      await patchMut.mutateAsync({
+        pitch_edited_body: editedBody,
+        pitch_status: 'approved',
+      })
       setSavedAt(new Date().toLocaleTimeString())
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function changeStatus(newStatus: string) {
-    setSaving(true)
-    setError('')
-    try {
-      await patch({ prospect_status: newStatus })
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function changeOutreachStatus(newValue: string | null) {
-    if (!detail) return
-    // Optimistic update — flip the badge immediately so the user sees the
-    // click land. Snapshot the prior value so we can revert on failure.
-    const prior = detail.prospect.outreach_status
-    setDetail({
-      ...detail,
-      prospect: { ...detail.prospect, outreach_status: newValue },
-    })
-    setError('')
-    try {
-      await patch({ outreach_status: newValue })
-    } catch (e: any) {
-      // Revert on failure.
-      setDetail((d) =>
-        d ? { ...d, prospect: { ...d.prospect, outreach_status: prior } } : d
-      )
-      setError(e.message)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'approve failed')
     }
   }
 
   async function discoverContacts() {
-    setDiscovering(true)
     setError('')
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/discover-contacts`, { method: 'POST', headers })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'discovery failed' }))
-        throw new Error(err.error ?? 'discovery failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setDiscovering(false)
+      await discoverMut.mutateAsync()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'discovery failed')
     }
   }
 
   async function regenerate() {
-    setRegenerating(true)
     setError('')
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/regenerate-pitch`, { method: 'POST', headers })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'regenerate failed' }))
-        throw new Error(err.error ?? 'regenerate failed')
-      }
-      await load()
+      await regenMut.mutateAsync()
       setSavedAt(new Date().toLocaleTimeString())
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setRegenerating(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'regenerate failed')
     }
   }
 
@@ -329,73 +218,56 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
     setRevealingId(contactId)
     setError('')
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/contacts/${contactId}/reveal`, { method: 'POST', headers })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'reveal failed' }))
-        throw new Error(err.error ?? 'reveal failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
+      await revealMut.mutateAsync(contactId)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'reveal failed')
     } finally {
       setRevealingId(null)
     }
   }
 
-  function copy() {
-    const text = editedBody || detail?.pitch?.body || ''
-    navigator.clipboard.writeText(text).then(() => {
-      setCopiedAt(new Date().toLocaleTimeString())
-    })
-  }
-
   async function generateRecommendation() {
-    setRecommending(true)
     setError('')
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${id}/recommend-channel`, { method: 'POST', headers })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'recommendation failed' }))
-        throw new Error(err.error ?? 'recommendation failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setRecommending(false)
+      await recommendMut.mutateAsync()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'recommendation failed')
     }
   }
 
   async function sendViaZoho() {
-    setSending(true)
+    if (!detail?.pitch?.id) return
     setError('')
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/pitches/${detail?.pitch ? (detail.pitch as any).id ?? '' : ''}/send`, {
-        method: 'POST',
-        headers,
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'send failed' }))
-        throw new Error(err.error ?? 'send failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setSending(false)
+      await sendMut.mutateAsync(detail.pitch.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'send failed')
     }
+  }
+
+  function copy() {
+    const text = editedBody || detail?.pitch?.body || ''
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopiedAt(new Date().toLocaleTimeString())
+    })
   }
 
   function copyScript() {
     const text = detail?.recommendation?.phone_script ?? ''
     if (!text) return
-    navigator.clipboard.writeText(text).then(() => {
+    void navigator.clipboard.writeText(text).then(() => {
       setScriptCopiedAt(new Date().toLocaleTimeString())
     })
   }
+
+  const loading = detailQ.isLoading
+  // Aggregate "anything in flight" disabling for the pitch action row,
+  // so callers don't have to enumerate every mutation.
+  const saving = patchMut.isPending
+  const regenerating = regenMut.isPending
+  const recommending = recommendMut.isPending
+  const sending = sendMut.isPending
+  const discovering = discoverMut.isPending
 
   if (loading) return <div className="text-muted-foreground">Loading…</div>
   if (error && !detail) return <div className="text-destructive">{error}</div>

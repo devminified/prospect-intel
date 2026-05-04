@@ -19,12 +19,8 @@ import {
  * Internally delegates to TanStack mutations from lib/queries/contacts so:
  *   - request/parse/error logic is centralized in lib/api-client.ts
  *   - cache invalidation runs (queryKeys.prospect)
- *
- * `onChange` is kept for backward-compat — page still uses load() to
- * refresh the contacts list. Once page swaps to useProspectDetail
- * directly, the callback becomes redundant.
  */
-export function useContactMutations(prospectId: string, onChange: () => void) {
+export function useContactMutations(prospectId: string) {
   const [pendingId, setPendingId] = useState<string | null>(null)
   const [pendingKind, setPendingKind] = useState<'phone' | 'linkedin' | 'name' | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -67,14 +63,12 @@ export function useContactMutations(prospectId: string, onChange: () => void) {
         contactId,
         patch: { phone: trimmed === '' ? null : trimmed },
       })
-      onChange()
     })
   }
 
   async function useBusinessPhone(contactId: string) {
     await withPending(contactId, 'phone', async () => {
       await useBusinessMutation.mutateAsync(contactId)
-      onChange()
     })
   }
 
@@ -89,7 +83,6 @@ export function useContactMutations(prospectId: string, onChange: () => void) {
     }
     await withPending(contactId, 'phone', async () => {
       await findDirectMutation.mutateAsync(contactId)
-      onChange()
     })
   }
 
@@ -108,7 +101,6 @@ export function useContactMutations(prospectId: string, onChange: () => void) {
         contactId,
         patch: { linkedin_url: trimmed === '' ? null : trimmed },
       })
-      onChange()
     })
   }
 
@@ -140,7 +132,6 @@ export function useContactMutations(prospectId: string, onChange: () => void) {
           full_name: trimmed,
         },
       })
-      onChange()
     })
   }
 

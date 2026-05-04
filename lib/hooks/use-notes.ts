@@ -11,14 +11,9 @@ export type { Note }
  * API the prospect detail page consumes today. Internally delegates to
  * TanStack mutations from lib/queries/notes so:
  *   - request/parse/error logic is centralized in lib/api-client.ts
- *   - cache invalidation runs (queryKeys.notes / queryKeys.prospectActivity)
- *
- * `onChange` is kept for backward-compat — the page still uses load() to
- * fetch notes for the activity feed; the callback triggers that refresh.
- * Once the page swaps to useNotes (TanStack query) directly, onChange
- * becomes redundant — see Phase 9 carry-forward notes.
+ *   - cache invalidation runs (queryKeys.notes / queryKeys.prospectActivity / queryKeys.prospect)
  */
-export function useNotes(prospectId: string, onChange: () => void) {
+export function useNotes(prospectId: string) {
   const [newBody, setNewBody] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingBody, setEditingBody] = useState('')
@@ -43,7 +38,6 @@ export function useNotes(prospectId: string, onChange: () => void) {
     try {
       await addMutation.mutateAsync(text)
       setNewBody('')
-      onChange()
     } catch (e: any) {
       setError(e.message)
     }
@@ -68,7 +62,6 @@ export function useNotes(prospectId: string, onChange: () => void) {
       await editMutation.mutateAsync({ noteId: editingId, body: text })
       setEditingId(null)
       setEditingBody('')
-      onChange()
     } catch (e: any) {
       setError(e.message)
     }
@@ -79,7 +72,6 @@ export function useNotes(prospectId: string, onChange: () => void) {
     setError(null)
     try {
       await deleteMutation.mutateAsync(id)
-      onChange()
     } catch (e: any) {
       setError(e.message)
     }

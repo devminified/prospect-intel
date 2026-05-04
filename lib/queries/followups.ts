@@ -16,15 +16,22 @@ export function useFollowups(prospectId: string) {
   })
 }
 
+function invalidateAfterFollowupChange(
+  qc: ReturnType<typeof useQueryClient>,
+  prospectId: string
+) {
+  qc.invalidateQueries({ queryKey: queryKeys.followups.byProspect(prospectId) })
+  qc.invalidateQueries({ queryKey: queryKeys.prospectActivity(prospectId) })
+  // Aggregate detail query embeds followups for the prospect detail page.
+  qc.invalidateQueries({ queryKey: queryKeys.prospect(prospectId) })
+}
+
 export function useAddFollowup(prospectId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (input: { due_at: string; note: string | null }) =>
       apiPost<void>(`/api/prospects/${prospectId}/followups`, input),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.followups.byProspect(prospectId) })
-      qc.invalidateQueries({ queryKey: queryKeys.prospectActivity(prospectId) })
-    },
+    onSuccess: () => invalidateAfterFollowupChange(qc, prospectId),
   })
 }
 
@@ -55,9 +62,7 @@ export function useToggleFollowupDone(prospectId: string) {
     onError: (_err, _vars, ctx) => {
       if (ctx?.prior) qc.setQueryData(queryKeys.followups.byProspect(prospectId), ctx.prior)
     },
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.followups.byProspect(prospectId) })
-    },
+    onSettled: () => invalidateAfterFollowupChange(qc, prospectId),
   })
 }
 
@@ -65,8 +70,6 @@ export function useDeleteFollowup(prospectId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => apiDelete<void>(`/api/prospects/${prospectId}/followups/${id}`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.followups.byProspect(prospectId) })
-    },
+    onSuccess: () => invalidateAfterFollowupChange(qc, prospectId),
   })
 }

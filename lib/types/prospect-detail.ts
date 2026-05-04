@@ -161,6 +161,7 @@ const AnalysisSchema = z.object({
 })
 
 const PitchSchema = z.object({
+  id: z.string().uuid(),
   subject: z.string().nullable(),
   body: z.string().nullable(),
   edited_body: z.string().nullable(),

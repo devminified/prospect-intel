@@ -21,20 +21,13 @@ interface ProspectContext {
  * Owns local form state for the Follow-ups card. Internally delegates to
  * TanStack mutations from lib/queries/followups so:
  *   - request/parse/error logic is centralized in lib/api-client.ts
- *   - cache invalidation runs (queryKeys.followups / queryKeys.prospectActivity)
+ *   - cache invalidation runs (followups + prospectActivity + prospect aggregate)
  *   - toggle-done's optimistic flip + rollback come from useToggleFollowupDone
  *
- * The legacy `applyOptimistic` callback is no longer needed (TanStack
- * handles cache rollback) but remains accepted for backward-compat with
- * the prospect detail page until M64. ICS download stays here since it's
- * a pure client-side transform, not a network call.
+ * ICS download stays here since it's a pure client-side transform, not a
+ * network call.
  */
-export function useFollowups(
-  prospect: ProspectContext,
-  onChange: () => void,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _applyOptimistic?: (mutator: (list: Followup[]) => Followup[]) => void
-) {
+export function useFollowups(prospect: ProspectContext) {
   const [newAt, setNewAt] = useState('')
   const [newNote, setNewNote] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -66,7 +59,6 @@ export function useFollowups(
       })
       setNewAt('')
       setNewNote('')
-      onChange()
     } catch (e: any) {
       setError(e.message)
     }
@@ -76,7 +68,6 @@ export function useFollowups(
     setError(null)
     try {
       await toggleMutation.mutateAsync({ id: f.id, done: !f.done })
-      onChange()
     } catch (e: any) {
       setError(e.message)
     }
@@ -87,7 +78,6 @@ export function useFollowups(
     setError(null)
     try {
       await deleteMutation.mutateAsync(fid)
-      onChange()
     } catch (e: any) {
       setError(e.message)
     }

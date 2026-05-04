@@ -1,4 +1,4 @@
--- M69: Allow up to 2 owners per team.
+
 --
 -- Up to now the team model assumed exactly one owner; transfers were atomic
 -- swaps via the transfer_team_ownership() function (M50). The product is

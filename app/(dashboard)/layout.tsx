@@ -7,14 +7,21 @@ import { supabase } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useCurrentTeam } from '@/lib/queries/team'
 
-const NAV = [
+/**
+ * Nav links + the role gate for each. `roles` is the allow-list — undefined
+ * means "everyone on the team sees it". Mirrors the page-level RBAC: a
+ * manager direct-navigating to /settings/email still sees a read-only
+ * page (M70), but the nav doesn't advertise it.
+ */
+const NAV: Array<{ href: string; label: string; roles?: string[] }> = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/leads', label: 'Leads' },
   { href: '/plans', label: 'Plans' },
   { href: '/batches', label: 'Batches' },
   { href: '/settings/icp', label: 'ICP' },
-  { href: '/settings/email', label: 'Email' },
+  { href: '/settings/email', label: 'Email', roles: ['owner'] },
   { href: '/settings/team', label: 'Team' },
 ]
 
@@ -23,6 +30,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [loading, setLoading] = useState(true)
   const router = useRouter()
   const pathname = usePathname()
+  const teamQ = useCurrentTeam()
+  const myRole = teamQ.data?.my_role ?? null
+  // While the role is unknown, hide role-gated nav items rather than
+  // flashing them and then yanking them away.
+  const visibleNav = NAV.filter((n) => !n.roles || (myRole && n.roles.includes(myRole)))
 
   useEffect(() => {
     const getUser = async () => {
@@ -106,7 +118,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <div className="flex items-center gap-6">
               <h1 className="text-xl font-semibold">Prospect Intel</h1>
               <nav className="hidden md:flex gap-1 text-sm">
-                {NAV.map((n) => {
+                {visibleNav.map((n) => {
                   const active = pathname === n.href || pathname.startsWith(`${n.href}/`)
                   return (
                     <Link

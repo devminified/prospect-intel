@@ -27,9 +27,10 @@ export default function EmailSettingsPage() {
 
   const account = accountQ.data ?? null
   // Disconnecting affects every team member because the account is
-  // team-scoped (M70). Restrict to owner + manager.
+  // team-scoped (M70). Owner-only — managers have read access (so they
+  // can see the team mailbox is connected) but can't disconnect/connect.
   const myRole = teamQ.data?.my_role ?? null
-  const canManage = myRole === 'owner' || myRole === 'manager'
+  const canManage = myRole === 'owner'
 
   const [cap, setCap] = useState(20)
   const [senderTitle, setSenderTitle] = useState('')
@@ -137,7 +138,7 @@ export default function EmailSettingsPage() {
               </Button>
             ) : (
               <p className="text-xs text-muted-foreground">
-                Only an owner or manager can connect the team's email account.
+                Only the team owner can connect the email account.
               </p>
             )}
           </CardContent>
@@ -183,7 +184,7 @@ export default function EmailSettingsPage() {
                   </Button>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    Only owners and managers can disconnect the team's email account.
+                    Only the team owner can disconnect the email account.
                   </p>
                 )}
               </div>

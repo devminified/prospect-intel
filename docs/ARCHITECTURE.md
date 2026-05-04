@@ -1,5 +1,27 @@
 # Architecture
 
+## Two-module overview
+
+The app is one Next.js deployment but two parallel product modules sharing the team boundary:
+
+```
+                           Devminified team
+                          ┌──────────────────┐
+   OUTBOUND ──────────────┤ team_members     ├────────────── UPWORK
+   (cold prospecting)     │  owner / manager │       (agency BD operation)
+                          │  lead_gen        │
+                          │  cold_caller     │
+                          │  closer          │
+                          │  bidder          │
+                          └──────────────────┘
+                              │           │
+              outbound roles  │           │  upwork_profile_members
+              gate /leads     │           │  gate /upwork
+              etc.            │           │  per profile + role
+```
+
+**Module isolation rule:** owner is the only role that bypasses both gates. Team-wide manager grants outbound management only — Upwork access requires an explicit `upwork_profile_members` row. Bidder = Upwork-only (zero outbound permissions). The nav layout filters tabs against this matrix; pure-bidder accounts auto-redirect from outbound URLs to `/upwork`.
+
 ## High-level flow
 
 ```
@@ -7,16 +29,21 @@ Browser
   │
   ▼
 Next.js on Vercel (one app, one deployable)
-  ├── app/(dashboard)/…      ← UI pages (client components behind auth guard)
-  ├── app/(auth)/…            ← public login/signup
-  ├── app/api/…               ← API routes (serverless functions)
-  └── lib/                    ← shared server logic
+  ├── app/(auth)/…            ← public login + invite-only /signup + /no-team
+  ├── app/(dashboard)/…       ← auth-guarded UI: outbound + /upwork sub-tree
+  ├── app/api/…               ← API routes (mostly thin delegators to lib/services)
+  └── lib/
+       ├── types/              ← Zod schemas + z.infer types (single source of truth)
+       ├── db/                 ← typed Supabase queries (no business logic)
+       ├── services/           ← business layer: RBAC + Zod validation + composes db
+       ├── queries/            ← TanStack Query hooks (browser only)
+       ├── pipeline/           ← cron-driven outbound stages (enrich/analyze/etc)
+       └── <vendor>/           ← apollo, contacts, lusha, places, llm, scrape, email
        │
        ▼
-  Vercel Cron (three schedules):
-    ├─ */2  → /api/cron/process       (pipeline driver)
-    │         reaps stuck-running jobs, claims pending, dispatches + chains
-    ├─ */10 → /api/cron/read-replies  (inbox poll + Haiku classify)
+  Vercel Cron (three schedules — all OUTBOUND only):
+    ├─ */2  → /api/cron/process       (outbound pipeline driver)
+    ├─ */10 → /api/cron/read-replies  (Zoho inbox poll + Haiku classify)
     └─ 0 8  → /api/cron/daily-plan    (auto-gen today's plan at 08:00 UTC)
        │
        ▼
@@ -24,8 +51,10 @@ Next.js on Vercel (one app, one deployable)
        │
        ▼
   External APIs: Google Places (New), ScrapingBee (render + AI Extract),
-                 Apollo.io, SerpApi, Anthropic, Groq, Meta Graph
+                 Apollo.io, Lusha, SerpApi, Anthropic, Groq, Meta Graph, Zoho Mail
 ```
+
+The Upwork module currently has no cron — it's manual data entry only. Future Phase 12 may add Upwork API auto-pull.
 
 **Hard constraint:** every job processes ONE prospect and must finish under 30 seconds. Never loop over a batch inside one request.
 
@@ -46,108 +75,110 @@ Email reveal is **not a cron job**. It runs inline in `POST /api/prospects/:id/c
 
 The daily planner (Phase 4A) is orthogonal to this pipeline. It writes `lead_plans` + `lead_plan_items`; executing a plan simply creates normal `batches` that then flow through this pipeline.
 
-## Folder tree (current)
+## Folder tree (current — Phase 11D)
 
 ```
 prospect-intel/
 ├── app/
-│   ├── (auth)/                                       ← public routes
+│   ├── (auth)/                          ← public routes
 │   │   ├── login/page.tsx
-│   │   └── signup/page.tsx
-│   ├── (dashboard)/                                  ← auth-guarded by layout
-│   │   ├── layout.tsx                                ← session guard + top nav
-│   │   ├── batches/
-│   │   │   ├── page.tsx                              ← list + create form
-│   │   │   └── [id]/page.tsx                         ← prospect list sorted by score + Export CSV
-│   │   ├── prospects/[id]/page.tsx                   ← 3-panel + visibility + executives
-│   │   ├── plans/
-│   │   │   ├── page.tsx                              ← list of daily plans
-│   │   │   └── [id]/page.tsx                         ← plan detail + Execute
-│   │   └── settings/icp/page.tsx                     ← ICP form
+│   │   ├── signup/page.tsx              ← invite-token-gated (M67)
+│   │   └── no-team/page.tsx             ← orphan-account landing
+│   ├── (dashboard)/                     ← auth-guarded by layout (probes /api/team for orphan→/no-team redirect)
+│   │   ├── layout.tsx                   ← session guard + role-gated nav (incl. Upwork tab + pure-bidder redirect)
+│   │   ├── dashboard/page.tsx           ← outbound dashboard + team-progress card (owner+manager)
+│   │   ├── batches/                     ← outbound batch list + detail
+│   │   ├── leads/page.tsx               ← outbound list + Group-by Outreach/Pipeline kanban + DnD
+│   │   ├── plans/                       ← outbound daily planner
+│   │   ├── prospects/[id]/page.tsx      ← outbound prospect detail (1300+ lines, TanStack)
+│   │   ├── settings/{icp,email,team}/   ← outbound settings
+│   │   └── upwork/                      ← Phase 11 module (parallel to outbound)
+│   │       ├── page.tsx                 ← cross-profile overview + revenue chart
+│   │       ├── leaderboard/             ← bidder leaderboard (manager+ scoped)
+│   │       ├── jobs/                    ← team-wide jobs list + detail with bid form
+│   │       ├── conversations/[id]/      ← message thread + status flow
+│   │       ├── contracts/[id]/          ← type-aware: milestones (fixed) or time logs (hourly)
+│   │       └── profiles/
+│   │           ├── page.tsx             ← profiles list (owner-only create)
+│   │           └── [id]/
+│   │               ├── page.tsx         ← profile detail: tiles + dashboard + members
+│   │               ├── proposals/       ← per-profile proposals
+│   │               ├── conversations/   ← per-profile threads
+│   │               ├── contracts/       ← per-profile contracts
+│   │               └── connects/        ← Connects ledger
 │   ├── api/
-│   │   ├── batches/route.ts                          ← POST: create batch + enqueue enrich jobs
-│   │   ├── cron/process/route.ts                     ← atomic claim + dispatch + reaper
-│   │   ├── icp/route.ts                              ← GET + PATCH
-│   │   ├── pitches/export/route.ts                   ← CSV of approved pitches
-│   │   ├── plans/route.ts                            ← POST: generate plan via Opus
-│   │   ├── plans/[id]/execute/route.ts               ← POST: execute all items (or ?item_id=...)
-│   │   ├── prospects/[id]/route.ts                   ← PATCH: status / pitch edits
-│   │   ├── prospects/[id]/discover-contacts/route.ts ← POST: Apollo people search
-│   │   ├── prospects/[id]/contacts/[contactId]/reveal/route.ts ← POST: reveal email
-│   │   ├── prospects/[id]/recommend-channel/route.ts ← POST: Sonnet channel fit + phone script
-│   │   ├── prospects/[id]/regenerate-pitch/route.ts  ← POST: re-run Sonnet
-│   │   ├── pitches/[id]/send/route.ts                ← POST: send via Zoho, log sent_emails
-│   │   ├── auth/zoho/authorize/route.ts              ← GET: start Zoho OAuth, set state cookie
-│   │   ├── auth/zoho/callback/route.ts               ← GET: exchange code, store tokens
-│   │   ├── auth/heartbeat/route.ts                   ← POST: capture sender IP for self-open filter
-│   │   ├── track/open/[id]/route.ts                  ← GET: 1x1 PNG + log email_opens
-│   │   ├── unsub/route.ts                            ← GET: public unsubscribe page
-│   │   ├── performance/route.ts                      ← GET: per-(category,city) reply aggregates
-│   │   ├── cron/read-replies/route.ts                ← GET */10: poll inbox + classify replies
-│   │   ├── cron/daily-plan/route.ts                  ← GET 0 8 * * *: auto-gen today's plan
-│   │   └── test/                                     ← CRON_SECRET-gated per-stage invokers
-│   │       ├── analyze-one/route.ts
-│   │       ├── audit-one/route.ts
-│   │       ├── contacts-one/route.ts
-│   │       ├── enrich-demo/route.ts
-│   │       ├── enrich-one/route.ts
-│   │       ├── pitch-one/route.ts
-│   │       ├── recommend-one/route.ts
-│   │       └── replies-one/route.ts
-│   ├── layout.tsx                                    ← root <html>
-│   └── page.tsx                                      ← redirects "/" → "/batches"
-├── components/ui/                                    ← shadcn primitives (Base UI + Tailwind)
-├── lib/
-│   ├── analyze.ts                                    ← Haiku: pain points + score
-│   ├── audit.ts                                      ← GMB + social + SerpApi + Groq summary
-│   ├── booking-platforms.ts                          ← 16-platform regex table + generic CTA
-│   ├── contacts.ts                                   ← Apollo: discoverPeople + revealEmail
-│   ├── enrich.ts                                     ← Cheerio → ScrapingBee render → AI Extract → business email discovery
-│   ├── email-discovery.ts                            ← extractEmailsFromHtml + pickBestEmail (vendor-domain filter, business-domain match, localpart ranking)
-│   ├── errors.ts                                     ← ExternalAPIError (provider-tagged)
-│   ├── llm/
-│   │   ├── anthropic.ts                              ← analyze + pitch + planner
-│   │   └── groq.ts                                   ← bulk summarization only
-│   ├── pitch.ts                                      ← Sonnet: 4-sentence cold email, upsertable
-│   ├── places.ts                                     ← Google Places (New): Text Search (paginates to 60 via nextPageToken, over-fetches 2×) + Details + filterDuplicatePlaces + filterByIcpFloors (rating / reviews / business_status / require_phone)
-│   ├── plans.ts                                      ← planner (Opus) + executePlan + computeRecentPerformance
-│   ├── prompts.ts                                    ← SINGLE source of truth for prompt templates
-│   ├── recommend.ts                                  ← Sonnet: channel fit scores + phone script
-│   ├── email/
-│   │   ├── zoho.ts                                   ← Zoho OAuth + Mail API wrapper (send, folders, list)
-│   │   ├── templates.ts                              ← HTML email builder + signature block + unsub token
-│   │   └── replies.ts                                ← pollReplies: inbox poll + match + Haiku classify
-│   ├── queue.ts                                      ← enqueueJob / getNextJobs / markJob* helpers
-│   ├── scrape/
-│   │   └── scrapingbee.ts                            ← renderPage + extractTypedFields
-│   ├── seasonality.ts                                ← ~50-category peak-months calendar
-│   ├── supabase/
-│   │   ├── client.ts                                 ← browser (anon, RLS-scoped)
-│   │   └── server.ts                                 ← supabaseAdmin (service role, SERVER ONLY)
-│   └── utils.ts                                      ← cn() helper for shadcn
-├── supabase/migrations/                              ← timestamped, append-only
-│   ├── 20260420181100_init.sql                       ← M1–M10 schema
-│   ├── 20260422000000_rename_place_id.sql            ← HERE → Google rename
-│   ├── 20260422180000_contacts.sql                   ← M12 contacts + RLS
-│   ├── 20260423000000_visibility_audits.sql          ← M13 visibility_audits + RLS
-│   ├── 20260424000000_phase3.sql                     ← M18: score threshold, auto_enrich, scraped_data
-│   ├── 20260424120000_plans.sql                      ← M20: icp_profile, lead_plans, lead_plan_items
-│   ├── 20260424180000_channel_recommendations.sql    ← M22: channel_recommendations
-│   ├── 20260425120000_email.sql                      ← M23: email_accounts, sent_emails, opens, replies, unsubs
-│   ├── 20260425140000_email_poll_state.sql           ← M24: last_poll_at, inbox_folder_id, replies unique index
-│   ├── 20260425160000_sender_signature.sql           ← post-M26: signature fields on email_accounts
-│   ├── 20260425180000_icp_social_and_filter.sql      ← post-M26: icp social toggles + prospects.filter_reason
-│   ├── 20260425200000_self_open_and_planner_aware.sql ← post-M26: is_probably_self + known_self_ips
-│   ├── 20260425220000_email_discovery.sql            ← M28: prospects.email_source/confidence + icp.require_reachable
-│   ├── 20260425230000_batch_filter_counts.sql        ← M29: batches.count_filtered_below_icp + count_duplicates_skipped
-│   ├── 20260427000000_phone_reveal.sql               ← M31: contacts.phone_revealed_at audit timestamp (legacy: Apollo, now reused for Lusha + GMB-business)
-│   ├── 20260427010000_phone_request_id.sql           ← M32: contacts.phone_request_id (legacy Apollo webhook key — Apollo flow rolled back in M34, column kept for historical rows)
-│   └── 20260428000000_phone_source.sql               ← M34: contacts.phone_source enum (gmb_business / lusha_direct / apollo_legacy)
-├── .env.local.example                                ← all env keys, empty values
-├── .mcp.json                                         ← Playwright MCP for local QA
-├── vercel.json                                       ← cron schedule */2 * * * *
-├── CLAUDE.md                                         ← root spec — rules + index
-├── docs/                                             ← this directory
+│   │   ├── auth/zoho/{authorize,callback}/    ← OAuth (legacy pattern — non-Bearer)
+│   │   ├── auth/heartbeat/                    ← capture sender IP for self-open filter
+│   │   ├── batches/route.ts                   ← thin delegator → batchesService.create
+│   │   ├── cron/process/                      ← every 2 min outbound pipeline
+│   │   ├── cron/read-replies/                 ← every 10 min inbox poll + Haiku classify
+│   │   ├── cron/daily-plan/                   ← 08:00 UTC outbound planner auto-gen
+│   │   ├── icp/                               ← outbound ICP CRUD
+│   │   ├── invite/[token]/                    ← public token-redeem
+│   │   ├── pitches/{[id]/send,export}/        ← Zoho send + CSV export
+│   │   ├── plans/{,[id]/execute}/             ← Opus generate + plan execution
+│   │   ├── prospects/[id]/{,...}              ← detail + nested actions (assign, status, deal_stage, mutations, contacts)
+│   │   ├── team/{,members,invites,progress,transfer-ownership}/  ← team-side management
+│   │   ├── performance/                       ← outbound (category,city) reply aggregates
+│   │   ├── unsub/                             ← public unsubscribe redemption
+│   │   ├── track/open/[id]/                   ← 1x1 PNG + email_opens log
+│   │   ├── upwork/                            ← Phase 11 — parallel module
+│   │   │   ├── access/                        ← my role + profile membership count
+│   │   │   ├── overview/                      ← cross-profile dashboard
+│   │   │   ├── leaderboard/                   ← bidder roll-up (manager+ scoped)
+│   │   │   ├── profiles/{,[id]/{members,proposals,conversations,contracts,connects,dashboard}}
+│   │   │   ├── jobs/{,[id]}/                  ← team-wide jobs + dedup
+│   │   │   ├── proposals/{,[id]}/             ← bid actions
+│   │   │   ├── conversations/{,[id]/messages} ← thread + append-only messages
+│   │   │   ├── contracts/{,[id]/{milestones,time-logs}}
+│   │   │   ├── milestones/[id]/               ← fixed-price scoping
+│   │   │   └── time-logs/[id]/                ← hourly logs
+│   │   └── test/                              ← CRON_SECRET-gated per-stage invokers
+│   ├── invite/[token]/page.tsx                ← invite redemption flow
+│   ├── layout.tsx                             ← root <html>
+│   └── page.tsx                               ← redirects "/" → "/dashboard"
+├── components/ui/                             ← shadcn primitives
+├── lib/                                       ← layered architecture (Phase 8/9)
+│   ├── types/                                 ← Zod schemas + z.infer types (single source of truth — see CONVENTIONS § Layered architecture)
+│   │   ├── prospect.ts                        ← Prospect / ProspectStatus / OutreachStatus / DealStage
+│   │   ├── upwork.ts                          ← UpworkProfile / UpworkProfileRole / UpworkClient / UpworkAccessInfo
+│   │   ├── upwork-jobs.ts                     ← Upwork jobs + proposals + connects ledger
+│   │   ├── upwork-conversations.ts            ← Upwork threads + messages
+│   │   ├── upwork-contracts.ts                ← Upwork contracts + milestones + time logs
+│   │   ├── upwork-analytics.ts                ← analytics rollup shapes (no Zod — read-only)
+│   │   ├── views.ts · prospect-detail.ts · email-account.ts · job.ts · …
+│   │   └── (other domain types)
+│   ├── db/                                    ← typed Supabase queries (no business logic)
+│   │   ├── prospects.ts · contacts.ts · followups.ts · notes.ts · batches.ts · teams.ts · icp.ts
+│   │   ├── upwork-profiles.ts · upwork-jobs.ts · upwork-proposals.ts · upwork-connects.ts · upwork-conversations.ts · upwork-contracts.ts
+│   ├── services/                              ← business layer: RBAC + Zod + composes db + vendors
+│   │   ├── access.ts                          ← requireProspectAccess / requireTeamAccess / requireUpworkAccess / requireUpworkProfileAccess / requireUpworkProfileManager
+│   │   ├── route-helper.ts                    ← withAuth wrapper + readJsonBody
+│   │   ├── errors.ts                          ← DomainError subclasses (Validation/Forbidden/Conflict/NotFound)
+│   │   ├── auth.ts · batches.ts · contacts.ts · followups.ts · icp.ts · notes.ts · pitches.ts · plans.ts · prospects.ts · recommendations.ts · teams.ts · team-progress.ts · performance.ts
+│   │   ├── upwork-profiles.ts · upwork-jobs.ts · upwork-proposals.ts · upwork-connects.ts · upwork-conversations.ts · upwork-contracts.ts · upwork-analytics.ts
+│   ├── queries/                               ← TanStack Query hooks (browser only)
+│   │   ├── api-client.ts (in lib/) · keys.ts (cache key registry)
+│   │   ├── batches.ts · batch-detail.ts · contacts.ts · dashboard.ts · email-account.ts · followups.ts · icp.ts · leads.ts · notes.ts · plans.ts · prospect-detail.ts · team.ts
+│   │   ├── upwork-profiles.ts · upwork-jobs.ts · upwork-conversations.ts · upwork-contracts.ts · upwork-analytics.ts
+│   ├── pipeline/                              ← cron-driven OUTBOUND stages (no Upwork)
+│   │   └── enrich.ts · analyze.ts · audit.ts · pitch.ts · recommend.ts · plans.ts
+│   ├── apollo/                                ← Apollo HTTP layer (split from old lib/contacts.ts in M61)
+│   ├── contacts/                              ← contact-row orchestration (Apollo + GMB + Lusha glue)
+│   ├── places/                                ← Google Places client
+│   ├── lusha/                                 ← Lusha v2 person-match
+│   ├── email/                                 ← zoho.ts (OAuth + Mail API), templates.ts, replies.ts (poll + classify)
+│   ├── llm/                                   ← anthropic.ts (Haiku/Sonnet/Opus), groq.ts (bulk summary)
+│   ├── scrape/                                ← scrapingbee.ts (render + AI Extract)
+│   ├── supabase/                              ← client.ts (anon RLS) + server.ts (service role)
+│   ├── hooks/                                 ← legacy custom hooks (use-notes/use-followups/use-contact-mutations) — TanStack-backed internally
+│   ├── api-client.ts · auth-headers.ts · errors.ts · ics.ts · prompts.ts · queue.ts · rbac.ts · seasonality.ts · team.ts · utils.ts · booking-platforms.ts · email-discovery.ts
+├── supabase/migrations/                       ← timestamped, append-only — see ARCHITECTURE.md "Migration history" below
+├── .env.local.example                         ← all env keys, empty values
+├── .mcp.json                                  ← Playwright MCP for local QA
+├── vercel.json                                ← cron schedules
+├── CLAUDE.md                                  ← root spec — rules + index
+├── docs/                                      ← this directory + per-phase archive
 └── package.json
 ```
 
@@ -169,52 +200,67 @@ prospect-intel/
 
 ## Data model summary
 
-Six core tables — see `supabase/migrations/20260420181100_init.sql` for the authoritative shape, and later migrations for additions.
+The schema is split between the outbound module (the original ~13 tables) and the Upwork module (Phase 11, 11 new `upwork_*` tables). Every table has RLS enabled. After Phase 6 (M42-M48) RLS policies route through `team_members` rather than direct `auth.uid()` ownership, so members can see + mutate their team's data subject to per-route role gates.
 
-- **`batches`** — user-triggered search. Fields: user_id, city, category, count_requested, count_completed, status, pitch_score_threshold, auto_enrich_top_n, **count_filtered_below_icp** (places dropped at import for not meeting min_gmb_rating / min_review_count / business_status), **count_duplicates_skipped** (places already existing as prospects)
-- **`prospects`** — one per business. Fields: batch_id, name, address, phone, website, email, **email_source** ('website_scrape' | 'apollo' | null), **email_confidence** ('verified' | 'guessed' | null), place_id (globally unique — used for cross-batch dedup), rating, review_count, hours_json, categories_text, status (new | enriched | analyzed | ready | contacted | replied | rejected | failed | filtered_out), filter_reason
-- **`enrichments`** — one per prospect. Fields: tech_stack_json, has_online_booking, has_ecommerce, has_chat, has_contact_form, is_mobile_friendly, ssl_valid, homepage_text_excerpt, scraped_data_json, fetch_error, fetched_at
-- **`analyses`** — Haiku output. Fields: pain_points_json, opportunity_score, best_angle, analyzed_at
-- **`contacts`** — one row per person. Fields: prospect_id, full_name, title, seniority, department, email, email_confidence, phone, linkedin_url, apollo_person_id, is_primary, email_revealed_at
-- **`visibility_audits`** — one per prospect. Fields: gmb_*, social_links_json, follower counts, serp_rank_main, serp_rank_brand, meta_ads_*, visibility_summary
-- **`pitches`** — Sonnet output. Fields: subject, body, edited_body, status (draft | approved | sent | replied), timestamps
-- **`channel_recommendations`** — on-demand, one per prospect. Fields: phone_fit_score, email_fit_score, recommended_channel (phone | email | either), reasoning, phone_script, generated_at
-- **`email_accounts`** — connected Zoho accounts (OAuth). Fields: user_id, email, display_name, zoho_account_id, api_domain, access_token, refresh_token, token_expires_at, daily_send_cap, sends_today, sends_reset_at, last_send_at, last_poll_at, inbox_folder_id, **sender_title, sender_company, calendly_url, website_url** (signature fields), **known_self_ips** (text[] — IPs captured via heartbeat to suppress sender-self opens)
-- **`sent_emails`** — one row per send. Fields: pitch_id, contact_id, account_id, message_id, thread_id, subject, body_html, to_email, bounced, bounce_reason, sent_at
-- **`email_opens`** — tracking-pixel hits. Fields: sent_email_id, opened_at, ip, user_agent, is_probably_mpp (true if hit <10s after send — likely Apple MPP or Gmail proxy), is_probably_self (true if request IP matches one of the sender's `email_accounts.known_self_ips` — sender browsing Sent folder, not a real recipient open)
-- **`email_replies`** — matched reply messages. Fields: sent_email_id, received_at, snippet, classification (interested | not_interested | ooo | unsubscribe | question), raw_message_id (unique)
-- **`email_unsubs`** — global opt-out list. Fields: contact_email (unique), unsubscribed_at, reason
-- **`jobs`** — the simple queue. Fields: batch_id, prospect_id, job_type, status (pending | running | done | failed), attempts, last_error, created_at, processed_at
+### Outbound module
 
-Phase 4A added:
-- **`icp_profile`** — one per user. Services[], capacity, cities, rating/review floors, target_categories, plus optional hard filters: **require_reachable** (any email or phone — recommended for B2C-friendly), require_linkedin, require_instagram, require_facebook, require_business_phone (prospect missing a required signal gets `status='filtered_out'` at the audit-done boundary in cron)
-- **`lead_plans`** — plan_date, rationale_json, status
-- **`lead_plan_items`** — priority, city, category, count, reasoning, batch_id (populated on execute)
+- **`teams`**, **`team_members`**, **`team_invites`** — Phase 6 multi-tenancy. `team_members.role` enum: `owner | manager | lead_gen | cold_caller | closer | bidder` (the last added in M72 as Upwork-only). Up to 2 owners per team enforced by trigger (M69).
+- **`batches`** — user-triggered search. Fields: user_id, team_id, city, category, count_requested, count_completed, status, pitch_score_threshold, auto_enrich_top_n, **count_filtered_below_icp**, **count_duplicates_skipped**.
+- **`prospects`** — one per business. Fields: batch_id, name, address, phone, website, email, **email_source** ('website_scrape' | 'apollo' | null), **email_confidence**, place_id (globally unique), rating, review_count, status (new | enriched | analyzed | ready | contacted | replied | rejected | failed | filtered_out), filter_reason, **assigned_to + assigned_at** (Phase 7), **outreach_status** (M36, manual call-outcome), **deal_stage + deal_stage_changed_at** (Phase 10A — 7-stage CRM funnel: lead → contacted → qualified → meeting → proposal → won + terminal lost).
+- **`enrichments`** — Cheerio + ScrapingBee output. tech_stack_json, has_online_booking, has_ecommerce, has_chat, has_contact_form, is_mobile_friendly, ssl_valid, scraped_data_json, fetch_error.
+- **`analyses`** — Haiku output. pain_points_json, opportunity_score, best_angle.
+- **`contacts`** — one per person. prospect_id, full_name, title, seniority, email, email_confidence, **phone, phone_source** (gmb_business | lusha_direct | apollo_legacy | manual — M34), **phone_revealed_at**, linkedin_url, apollo_person_id, is_primary.
+- **`visibility_audits`** — gmb_*, social_links_json, follower counts, serp_rank_main/brand, meta_ads_*, visibility_summary.
+- **`pitches`** — Sonnet output. subject, body, edited_body, status (draft | approved | sent | replied).
+- **`channel_recommendations`** — on-demand. phone_fit_score, email_fit_score, recommended_channel, reasoning, phone_script.
+- **`email_accounts`** — connected Zoho. UNIQUE `(team_id, provider)` after M70 (one mailbox per team, both owners share). Fields: zoho_account_id, api_domain, access/refresh tokens, daily_send_cap, sends_today, last_poll_at, signature fields (sender_title, sender_company, calendly_url, website_url), known_self_ips.
+- **`sent_emails`** + **`email_opens`** (with is_probably_mpp + is_probably_self filters) + **`email_replies`** (with Haiku classification: interested/not_interested/ooo/unsubscribe/question) + **`email_unsubs`** (global opt-out).
+- **`prospect_notes`** + **`prospect_followups`** — Phase 5 CRM-lite layer.
+- **`icp_profile`** — Phase 4A planner config, one per user. Services, capacity, cities, rating/review floors, target_categories, **hard filters** (require_reachable | require_linkedin | require_instagram | require_facebook | require_business_phone — failing prospects get `status='filtered_out'`).
+- **`lead_plans`** + **`lead_plan_items`** — Phase 4A daily plans.
+- **`jobs`** — the only queue. Fields: batch_id, prospect_id, job_type, status, attempts, last_error.
 
-Every table has RLS enabled. Policies chain back to `auth.uid()` through the foreign-key graph (batch → user, prospect → batch → user, etc.).
+### Upwork module (Phase 11)
+
+- **`upwork_profiles`** — one per Upwork freelancer/agency account the team operates from. Fields: team_id, name, slug (unique per team), description, account_type (individual | agency), profile_url, hourly_rate_usd, **connects_balance** (snapshot updated by `trg_upwork_sync_balance` AFTER INSERT on the ledger), status (active | paused | archived).
+- **`upwork_profile_members`** — junction `(profile_id, user_id)` with `role: manager | bidder`. Partial unique index enforces ≤1 manager per profile.
+- **`upwork_clients`** — team-scoped buyer dedup. UNIQUE `(team_id, upwork_client_id)`.
+- **`upwork_jobs`** — postings the team is tracking. UNIQUE `(team_id, upwork_job_id)` for cross-profile dedup. Budget shape (fixed/hourly with min/max), skills jsonb, status (open | closed | hired_other | dead).
+- **`upwork_proposals`** — one bid per `(profile_id, job_id)`. bidder_user_id, cover_letter, bid_amount_usd, bid_type (fixed/hourly), proposed_milestones_json, **connects_spent**, status enum (drafted/sent/viewed/shortlisted/interview/declined/withdrawn/hired/no_response), per-status timestamps.
+- **`upwork_connects_log`** — append-only ledger. Type enum (purchase/grant/refund/spend/adjustment), amount + signed_amount + balance_after, related_proposal_id (set when a 'spend' is auto-written by proposal submit). The trigger keeps `upwork_profiles.connects_balance` in sync.
+- **`upwork_conversations`** — thread between team and client. proposal_id (nullable for direct hires), client_id, status (waiting_reply | replying | interviewing | negotiating | closed_won | closed_lost | stale), denormalized last_message_at + last_message_from ('us' | 'them') + needs_reply.
+- **`upwork_messages`** — append-only thread log. direction (sent/received), occurred_at (Upwork-side timestamp).
+- **`upwork_contracts`** — signed engagement. type (fixed | hourly), agreed_total_usd | agreed_rate_usd, status (active | paused | ended | disputed), end_reason, optional FKs to proposal + conversation.
+- **`upwork_contract_milestones`** — fixed-price scoping. sequence (1-based, unique per contract), name, amount_usd, status (pending → funded → in_progress → submitted → paid + disputed/refunded), per-status timestamps.
+- **`upwork_time_logs`** — hourly weekly entries. UNIQUE `(contract, bidder, week_starting)` — week is the Monday. hourly_rate_usd snapshotted at log time. amount_usd is a **stored generated column** (`hours * rate`). status (logged → billed → paid → disputed).
+
+RLS gates everything through `is_team_member(team_id)` either directly or via the parent profile's team_id. Per-route role gates layer on top — see `lib/services/access.ts`.
 
 ## Environment variables
 
+The canonical list lives in `CLAUDE.md` § 3 — this is a quick reference:
+
 ```
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=       # server only, never exposed to browser
-GOOGLE_PLACES_API_KEY=
-SCRAPINGBEE_API_KEY=
-APOLLO_API_KEY=
-SERPAPI_KEY=
-ANTHROPIC_API_KEY=
-GROQ_API_KEY=
-META_ACCESS_TOKEN=               # app token for public Meta endpoints
-CRON_SECRET=                     # random string; cron route checks Bearer header
+# Outbound side
+NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY
+GOOGLE_PLACES_API_KEY · SCRAPINGBEE_API_KEY
+APOLLO_API_KEY · LUSHA_API_KEY (optional — direct/mobile reveal)
+SERPAPI_KEY · META_ACCESS_TOKEN
+ANTHROPIC_API_KEY · GROQ_API_KEY
+CRON_SECRET                        # gates /api/cron/* + /api/test/*
+ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET / NEXT_PUBLIC_APP_URL    # outbound mailbox
+
+# Upwork side
+# (none — manual entry only as of Phase 11D; Phase 12 may add UPWORK_OAUTH_*)
 ```
 
 `.env.local.example` has all keys with empty values. Never commit real keys.
 
 ## When this codebase should split
 
-Stay monolith until any of these happens, then re-evaluate:
+The original splitting heuristics were calibrated for a single-module app. Phase 11 added a parallel module sharing the team boundary, which inflates the line counts but doesn't change the deployment story — both modules are still one Next.js app on one Vercel project. Re-evaluate when:
 
-- **lib/ exceeds 3,000 LOC** → break into subpackages by domain (`lib/pipeline/`, `lib/integrations/`, `lib/planning/`)
-- **> 30 API routes** → introduce route groups (`app/api/(v1)/` etc)
-- **More than one consumer** (mobile app wants same backend) → extract `lib/` to a workspace package
+- **A second product team owns one of the two modules.** Then the boundary becomes a real API contract and a separate deploy starts paying for itself.
+- **lib/ exceeds 6,000 LOC** (was 3,000 pre-Phase-11 — current ~9k as of 11D, mostly typed services + db modules).
+- **More than one consumer** (mobile app, public API, etc.) — extract `lib/` to a workspace package and treat the Next.js app as one of many consumers.
+- **Cron schedules diverge per module** — if Phase 12 adds Upwork-side cron jobs and they have meaningfully different SLAs from outbound, splitting cron into its own deployable starts to make sense.

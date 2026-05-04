@@ -1,4 +1,4 @@
-import { computeRecentPerformance } from '@/lib/plans'
+import { computeRecentPerformance } from '@/lib/pipeline/plans'
 import { ValidationError } from './errors'
 
 /**

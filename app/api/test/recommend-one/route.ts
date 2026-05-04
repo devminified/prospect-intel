@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { recommendChannel } from '@/lib/recommend'
+import { recommendChannel } from '@/lib/pipeline/recommend'
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization')

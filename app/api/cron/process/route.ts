@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
-import { enrichProspect } from '@/lib/enrich'
-import { analyzeProspect } from '@/lib/analyze'
+import { enrichProspect } from '@/lib/pipeline/enrich'
+import { analyzeProspect } from '@/lib/pipeline/analyze'
 import { discoverPeople } from '@/lib/contacts'
-import { auditVisibility } from '@/lib/audit'
-import { generatePitch } from '@/lib/pitch'
+import { auditVisibility } from '@/lib/pipeline/audit'
+import { generatePitch } from '@/lib/pipeline/pitch'
 
 export const maxDuration = 60
 

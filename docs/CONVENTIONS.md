@@ -10,11 +10,19 @@ Code lives in named layers. Each layer only depends on layers below it.
 app/(dashboard)/.../page.tsx     UI            — JSX, shadcn primitives, useState for form/UI only
 app/api/.../route.ts             HTTP boundary — auth, parse body via Zod, delegate to service
 lib/queries/                     server state  — TanStack Query hooks (useQuery / useMutation)
-lib/services/                    business      — RBAC + Zod validation + composes lib/db + vendors
+lib/services/                    business      — RBAC + Zod validation + composes lib/db + vendors + pipeline
 lib/db/                          data          — typed Supabase queries, no business logic
 lib/types/                       types         — Zod schemas + z.infer types
-lib/                             vendors       — external API clients (lusha, places, zoho)
+lib/pipeline/                    pipeline      — cron-driven stages (enrich, analyze, audit, pitch, recommend, plans)
+lib/<vendor>/                    vendors       — external API clients (lib/places/, lib/lusha/, lib/email/zoho.ts, lib/scrape/scrapingbee.ts, lib/llm/groq.ts)
+lib/                             infra         — auth-headers, errors, ics, queue, rbac, team, utils, api-client, supabase/
 ```
+
+**Folder-vs-file convention for vendors:** every vendor lives in its own folder under `lib/<vendor>/`, even if it's currently a single file. New files for the same vendor (helpers, types, sub-clients) join that folder rather than landing at the top level.
+
+**Pipeline stages** are functions invoked from cron jobs (`/api/cron/process`, `/api/cron/daily-plan`) — they take a `prospectId` (or similar) and run a single stage end-to-end. They're NOT the same as services: services are user-facing entry points with auth + RBAC; pipeline functions are headless background work.
+
+**Domain helpers** that are pure functions used by multiple pipeline stages or services stay at the top of `lib/`: `lib/booking-platforms.ts`, `lib/email-discovery.ts`, `lib/seasonality.ts`, `lib/prompts.ts`. They have no I/O and no auth.
 
 **Rules of the layers:**
 

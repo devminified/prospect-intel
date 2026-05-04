@@ -1,4 +1,4 @@
-import { ExternalAPIError } from './errors'
+import { ExternalAPIError } from '../errors'
 
 const PROVIDER = 'Lusha'
 const LUSHA_BASE = 'https://api.lusha.com'

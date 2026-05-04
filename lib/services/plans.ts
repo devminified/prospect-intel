@@ -2,7 +2,7 @@ import {
   generatePlan as legacyGeneratePlan,
   executePlan as legacyExecutePlan,
   executePlanItem as legacyExecutePlanItem,
-} from '@/lib/plans'
+} from '@/lib/pipeline/plans'
 import { canCreateBatch, canGeneratePlan, roleForbiddenMessage } from '@/lib/rbac'
 import type { Role } from '@/lib/types'
 import { requireTeamAccess } from './access'

@@ -1,4 +1,4 @@
-import { recommendChannel as legacyRecommend } from '@/lib/recommend'
+import { recommendChannel as legacyRecommend } from '@/lib/pipeline/recommend'
 import { requireProspectAccess } from './access'
 
 /**

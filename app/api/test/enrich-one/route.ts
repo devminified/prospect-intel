@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { enrichProspect } from '@/lib/enrich'
+import { enrichProspect } from '@/lib/pipeline/enrich'
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization')

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { analyzeProspect } from '@/lib/analyze'
+import { analyzeProspect } from '@/lib/pipeline/analyze'
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization')

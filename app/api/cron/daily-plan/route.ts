@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
-import { generatePlan } from '@/lib/plans'
+import { generatePlan } from '@/lib/pipeline/plans'
 
 /**
  * Runs daily at 08:00 UTC via vercel.json. For each user with a configured

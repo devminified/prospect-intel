@@ -1,5 +1,5 @@
-import { ExternalAPIError } from './errors'
-import { supabaseAdmin } from './supabase/server'
+import { ExternalAPIError } from '../errors'
+import { supabaseAdmin } from '../supabase/server'
 
 if (!process.env.GOOGLE_PLACES_API_KEY) {
   throw new Error('Missing env.GOOGLE_PLACES_API_KEY')

@@ -1,7 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { PitchStatusSchema, type PitchStatus, type Role } from '@/lib/types'
 import { canSendEmail, roleForbiddenMessage } from '@/lib/rbac'
-import { generatePitch as legacyGeneratePitch } from '@/lib/pitch'
+import { generatePitch as legacyGeneratePitch } from '@/lib/pipeline/pitch'
 import { refreshAccessToken, sendMessage } from '@/lib/email/zoho'
 import { buildEmailHtml, b64url } from '@/lib/email/templates'
 import { requireProspectAccess, requireTeamAccess } from './access'

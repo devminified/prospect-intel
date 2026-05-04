@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { generatePitch } from '@/lib/pitch'
+import { generatePitch } from '@/lib/pipeline/pitch'
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization')

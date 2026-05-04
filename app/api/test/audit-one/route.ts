@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { auditVisibility } from '@/lib/audit'
+import { auditVisibility } from '@/lib/pipeline/audit'
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization')

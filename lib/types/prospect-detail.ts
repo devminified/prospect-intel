@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { Note } from './note'
 import type { Followup } from './followup'
+import { DealStageSchema } from './prospect'
 
 /**
  * Aggregate shape consumed by the prospect detail page (`app/(dashboard)/prospects/[id]/page.tsx`).
@@ -130,6 +131,8 @@ const ProspectHeaderSchema = z.object({
   batch_id: z.string().uuid(),
   status: z.string(),
   outreach_status: z.string().nullable(),
+  deal_stage: DealStageSchema.default('lead'),
+  deal_stage_changed_at: z.string().nullable(),
   assigned_to: z.string().nullable(),
   assigned_at: z.string().nullable(),
   last_viewed_at: z.string().nullable(),

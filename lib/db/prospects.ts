@@ -30,7 +30,13 @@ export async function update(
   patch: Partial<
     Pick<
       Prospect,
-      'status' | 'outreach_status' | 'last_viewed_at' | 'assigned_to' | 'assigned_at'
+      | 'status'
+      | 'outreach_status'
+      | 'last_viewed_at'
+      | 'assigned_to'
+      | 'assigned_at'
+      | 'deal_stage'
+      | 'deal_stage_changed_at'
     >
   >
 ): Promise<void> {

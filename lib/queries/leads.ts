@@ -21,7 +21,7 @@ export function useLeads() {
       const { data: pData, error: pErr } = await supabase
         .from('prospects')
         .select(
-          'id, name, status, outreach_status, last_viewed_at, website, rating, review_count, created_at, batch_id, assigned_to, batches!inner(city, category), analyses(opportunity_score, best_angle)'
+          'id, name, status, outreach_status, deal_stage, last_viewed_at, website, rating, review_count, created_at, batch_id, assigned_to, batches!inner(city, category), analyses(opportunity_score, best_angle)'
         )
         .order('created_at', { ascending: false })
         .limit(1000)
@@ -92,6 +92,7 @@ export function useLeads() {
         name: p.name,
         status: p.status,
         outreach_status: p.outreach_status ?? null,
+        deal_stage: p.deal_stage ?? 'lead',
         last_viewed_at: p.last_viewed_at ?? null,
         website: p.website ?? null,
         rating: p.rating ?? null,

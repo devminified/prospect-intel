@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { OutreachStateSchema } from './prospect'
+import { DealStageSchema, OutreachStateSchema } from './prospect'
 
 /**
  * View-level / aggregate shapes — the data structures returned by
@@ -20,6 +20,7 @@ export const LeadSchema = z.object({
   name: z.string(),
   status: z.string(),
   outreach_status: z.string().nullable(),
+  deal_stage: DealStageSchema.default('lead'),
   last_viewed_at: z.string().nullable(),
   website: z.string().nullable(),
   rating: z.number().nullable(),

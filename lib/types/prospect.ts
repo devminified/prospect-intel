@@ -34,6 +34,25 @@ export const OutreachStatusSchema = z.enum([
 ])
 export type OutreachStatus = z.infer<typeof OutreachStatusSchema>
 
+/**
+ * CRM funnel stage — orthogonal to both `status` (cron pipeline) and
+ * `outreach_status` (last-call outcome). User drags prospects through
+ * these stages on /leads kanban or sets them on the detail page.
+ *
+ * Terminal states: `won` and `lost` — the planner / dashboard will
+ * exclude these from "active funnel" counts.
+ */
+export const DealStageSchema = z.enum([
+  'lead',
+  'contacted',
+  'qualified',
+  'meeting',
+  'proposal',
+  'won',
+  'lost',
+])
+export type DealStage = z.infer<typeof DealStageSchema>
+
 export const ProspectSchema = z.object({
   id: z.string().uuid(),
   batch_id: z.string().uuid(),
@@ -55,6 +74,8 @@ export const ProspectSchema = z.object({
   last_viewed_at: z.string().nullable(),
   assigned_to: z.string().uuid().nullable(),
   assigned_at: z.string().nullable(),
+  deal_stage: DealStageSchema.default('lead'),
+  deal_stage_changed_at: z.string().nullable(),
   created_at: z.string(),
 })
 export type Prospect = z.infer<typeof ProspectSchema>
@@ -65,6 +86,7 @@ export const ProspectLeadRowSchema = ProspectSchema.pick({
   name: true,
   status: true,
   outreach_status: true,
+  deal_stage: true,
   website: true,
   rating: true,
   review_count: true,

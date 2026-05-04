@@ -7,6 +7,7 @@ import * as pitchesService from '@/lib/services/pitches'
  * Bundle PATCH — applies whichever of these the body contains:
  *   - prospect_status            → prospectsService.setStatus
  *   - outreach_status            → prospectsService.setOutreachStatus
+ *   - deal_stage                 → prospectsService.setDealStage
  *   - assigned_to                → prospectsService.assign
  *   - mark_viewed: true          → prospectsService.markViewed
  *   - pitch_edited_body / pitch_status → pitchesService.update
@@ -29,6 +30,9 @@ export async function PATCH(
     }
     if ('outreach_status' in body) {
       await prospectsService.setOutreachStatus(userId, prospectId, body.outreach_status)
+    }
+    if ('deal_stage' in body) {
+      await prospectsService.setDealStage(userId, prospectId, body.deal_stage)
     }
     if (body.mark_viewed === true) {
       await prospectsService.markViewed(userId, prospectId)

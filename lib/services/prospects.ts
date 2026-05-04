@@ -1,6 +1,6 @@
 import * as dbProspects from '@/lib/db/prospects'
 import * as dbTeams from '@/lib/db/teams'
-import { OutreachStatusSchema, ProspectStatusSchema } from '@/lib/types'
+import { DealStageSchema, OutreachStatusSchema, ProspectStatusSchema } from '@/lib/types'
 import type { Role } from '@/lib/types'
 import { canSetOutreachStatus, roleForbiddenMessage } from '@/lib/rbac'
 import { requireProspectAccess } from './access'
@@ -87,4 +87,29 @@ export async function assign(
 export async function markViewed(userId: string, prospectId: string): Promise<void> {
   await requireProspectAccess(userId, prospectId)
   await dbProspects.markViewed(prospectId)
+}
+
+export async function setDealStage(
+  userId: string,
+  prospectId: string,
+  raw: unknown
+): Promise<void> {
+  // Same RBAC as outreach_status — anyone who can record a call outcome
+  // should be able to advance the deal stage. Owners/managers always
+  // can; closers / cold-callers / lead-gen do via canSetOutreachStatus.
+  const { role } = await requireProspectAccess(userId, prospectId)
+  if (!canSetOutreachStatus(role as Role)) {
+    throw new ForbiddenError(roleForbiddenMessage(role as Role, 'change deal stage'))
+  }
+
+  const parsed = DealStageSchema.safeParse(raw)
+  if (!parsed.success) {
+    throw new ValidationError(
+      `Invalid deal_stage. Allowed: ${DealStageSchema.options.join(', ')}`
+    )
+  }
+  await dbProspects.update(prospectId, {
+    deal_stage: parsed.data,
+    deal_stage_changed_at: new Date().toISOString(),
+  })
 }

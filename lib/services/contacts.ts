@@ -9,6 +9,8 @@ import {
 import {
   useBusinessPhone as legacyUseBusinessPhone,
   findDirectLine as legacyFindDirectLine,
+  discoverPeople as legacyDiscoverPeople,
+  revealEmail as legacyRevealEmail,
 } from '@/lib/contacts'
 import { requireProspectAccess } from './access'
 import { ForbiddenError, NotFoundError, ValidationError } from './errors'
@@ -125,4 +127,39 @@ export async function findDirectLine(
   }
   await checkContactOwnership(prospectId, contactId)
   return legacyFindDirectLine(contactId)
+}
+
+/**
+ * Apollo people-search to populate the prospect's contacts table. Spends
+ * Apollo people-search quota (no per-credit cost for this endpoint), so
+ * gated on canCreateBatch (lead_gen / manager / owner) — same group that
+ * runs the lead-generation pipeline.
+ */
+export async function discover(userId: string, prospectId: string): Promise<void> {
+  const { role } = await requireProspectAccess(userId, prospectId)
+  if (!canCreateBatch(role as Role)) {
+    throw new ForbiddenError(
+      roleForbiddenMessage(role as Role, 'discover contacts (spends Apollo quota)')
+    )
+  }
+  await legacyDiscoverPeople(prospectId)
+}
+
+/**
+ * Spend one Apollo email credit to reveal a contact's verified email.
+ * Gated on canCreateBatch since this is a credit-spending lead-gen action.
+ */
+export async function revealEmail(
+  userId: string,
+  prospectId: string,
+  contactId: string
+): Promise<{ email: string | null }> {
+  const { role } = await requireProspectAccess(userId, prospectId)
+  if (!canCreateBatch(role as Role)) {
+    throw new ForbiddenError(
+      roleForbiddenMessage(role as Role, 'spend Apollo credits to reveal an email')
+    )
+  }
+  await checkContactOwnership(prospectId, contactId)
+  return legacyRevealEmail(contactId)
 }

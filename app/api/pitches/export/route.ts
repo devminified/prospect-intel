@@ -1,110 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabase/server'
+import { requireUserFromHeader } from '@/lib/services/auth'
+import { errorToResponse } from '@/lib/services/errors'
+import * as pitchesService from '@/lib/services/pitches'
 
-const CSV_COLUMNS = [
-  'name',
-  'website',
-  'email',
-  'subject',
-  'body',
-  'phone',
-  'recommended_channel',
-  'phone_fit_score',
-  'email_fit_score',
-  'phone_script',
-] as const
-
+/**
+ * Returns text/csv with attachment Content-Disposition. Doesn't fit
+ * the JSON withAuth wrapper, so re-implements auth + error mapping
+ * inline using the same building blocks.
+ */
 export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get('authorization')
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  try {
+    const { userId } = await requireUserFromHeader(request.headers.get('authorization'))
+    const batchId = request.nextUrl.searchParams.get('batch_id') ?? ''
+    const { filename, csv } = await pitchesService.exportApprovedCsv(userId, batchId)
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      },
+    })
+  } catch (err) {
+    const { status, body } = errorToResponse(err)
+    return NextResponse.json(body, { status })
   }
-  const token = authHeader.replace('Bearer ', '')
-  const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token)
-  if (userError || !userData?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-  const userId = userData.user.id
-
-  const batchId = request.nextUrl.searchParams.get('batch_id')
-  if (!batchId) {
-    return NextResponse.json({ error: 'Missing batch_id' }, { status: 400 })
-  }
-
-  const { data: batch, error: batchError } = await supabaseAdmin
-    .from('batches')
-    .select('id, city, category, user_id')
-    .eq('id', batchId)
-    .single()
-  if (batchError || !batch) {
-    return NextResponse.json({ error: 'Batch not found' }, { status: 404 })
-  }
-  if (batch.user_id !== userId) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-  }
-
-  const { data: rows, error: rowsError } = await supabaseAdmin
-    .from('pitches')
-    .select(`
-      subject,
-      body,
-      edited_body,
-      prospects!inner(
-        id,
-        name,
-        website,
-        email,
-        phone,
-        batch_id,
-        channel_recommendations(recommended_channel, phone_fit_score, email_fit_score, phone_script)
-      )
-    `)
-    .eq('status', 'approved')
-    .eq('prospects.batch_id', batchId)
-
-  if (rowsError) {
-    return NextResponse.json({ error: `Query failed: ${rowsError.message}` }, { status: 500 })
-  }
-
-  const csvLines: string[] = [CSV_COLUMNS.join(',')]
-
-  for (const row of (rows ?? []) as any[]) {
-    const p = row.prospects ?? {}
-    const rec = Array.isArray(p.channel_recommendations)
-      ? p.channel_recommendations[0] ?? null
-      : p.channel_recommendations ?? null
-    const bodyToSend: string = row.edited_body ?? row.body ?? ''
-    const values = [
-      p.name ?? '',
-      p.website ?? '',
-      p.email ?? '',
-      row.subject ?? '',
-      bodyToSend,
-      p.phone ?? '',
-      rec?.recommended_channel ?? '',
-      rec?.phone_fit_score != null ? String(rec.phone_fit_score) : '',
-      rec?.email_fit_score != null ? String(rec.email_fit_score) : '',
-      rec?.phone_script ?? '',
-    ]
-    csvLines.push(values.map(csvEscape).join(','))
-  }
-
-  const csv = csvLines.join('\n') + '\n'
-  const filename = `prospect-intel-${batch.category}-${batch.city}-${batchId.slice(0, 8)}.csv`
-    .replace(/[^a-z0-9.\-]+/gi, '-')
-
-  return new NextResponse(csv, {
-    status: 200,
-    headers: {
-      'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="${filename}"`,
-    },
-  })
-}
-
-function csvEscape(value: string): string {
-  if (/[",\r\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`
-  }
-  return value
 }

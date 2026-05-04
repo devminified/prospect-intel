@@ -1,46 +1,45 @@
 # Current phase
 
-**Active:** none. Phases 1 → 8 all shipped. Last milestone: M59 on 2026-05-04.
+**Active:** Phase 9 — finish the architecture migration that Phase 8 started but didn't complete.
 
-The codebase now has a layered architecture (UI → queries → services → db → types) with Zod validation at every boundary and TanStack Query for server state on three of four heavy pages. Prospect detail is the one consumer still on the M41 custom hooks — its TanStack migration is the obvious first thing for Phase 9.
+Phase 8 shipped + archived, but it left real gaps: 9 user-facing routes still on the legacy auth/parse pattern, the prospect detail page still on M41 custom hooks, and several legacy `lib/*.ts` files that don't fit the new layer model. Phase 9 closes those gaps.
 
-```
-plan (Opus, outcome-weighted) → enrich → analyze → pitch
-  → send via Zoho → track opens → detect replies → classify
-  → feed back into tomorrow's plan
+## Milestones
 
-  ↓ user-facing layer (Phase 5):
-/dashboard      KPI tiles + today's followups + activity feed
-/leads          cross-batch filter/sort/kanban + saved views + assignee filter
-/prospects/:id  notes + followups + activity timeline + ICS download
+### M60 — Finish the route migration (this commit)
+- ✓ `/api/performance` GET → performanceService
+- ✓ `/api/prospects/[id]/discover-contacts` POST → contactsService.discover
+- ✓ `/api/prospects/[id]/recommend-channel` POST → recommendationsService.recommend
+- ✓ `/api/prospects/[id]/regenerate-pitch` POST → pitchesService.regenerate
+- ✓ `/api/prospects/[id]/contacts/[contactId]/reveal` POST → contactsService.revealEmail
+- ✓ `/api/plans` POST → plansService.generate
+- ✓ `/api/plans/[id]/execute` POST (item + full) → plansService.executeItem / execute
+- ✓ `/api/batches` POST → batchesService.create
+- ✓ `/api/pitches/export` GET → pitchesService.exportApprovedCsv (text/csv, custom Response)
+- ✓ `/api/pitches/[id]/send` POST → pitchesService.send
 
-  ↓ multi-team (Phases 6+7):
-team management with owner / manager / lead_gen / cold_caller / closer
-per-lead assignment with My-leads / Unassigned filters
-member removal + ownership transfer
-RBAC at API + RLS at DB
+After M60, every user-facing route uses `withAuth`. The remaining "legacy pattern" routes are all legitimate exceptions: auth/* (OAuth flow, no Bearer), cron/* (CRON_SECRET-gated), test/* (CRON_SECRET-gated debug), track/open (public pixel), unsub (public token redemption).
 
-  ↓ architecture (Phase 8):
-typed Zod schemas, db / services / queries layers, thin API routes
-```
+### M61 — `lib/` reorganization
+Move legacy files into proper homes. Mechanical refactor with import updates.
+- `lib/places.ts` → `lib/places/index.ts`
+- `lib/lusha.ts` → `lib/lusha/index.ts`
+- `lib/enrich.ts`, `lib/analyze.ts`, `lib/audit.ts`, `lib/pitch.ts`, `lib/recommend.ts` → `lib/pipeline/{name}.ts`
+- `lib/plans.ts` → `lib/pipeline/plans.ts`
+- `lib/contacts.ts` → split Apollo client into `lib/apollo/index.ts`; business logic already lives in `lib/services/contacts.ts`
+- Helpers stay (`lib/booking-platforms.ts`, `lib/email-discovery.ts`, `lib/seasonality.ts`, `lib/prompts.ts`)
+- Update CONVENTIONS.md
 
-## Phase 9 candidates (not prioritized)
+### M62 — Prospect detail TanStack migration
+Deferred from Phase 8's M58d. Three blockers (custom hooks bundling form+mutation state, optimistic closures over setDetail, dual data flows via load+onChange) need step-by-step rewiring.
 
-- **Prospect detail TanStack migration** — last page on the legacy custom hooks. See `archive/phase-8-architecture.md` § Carry-forward for the three blockers.
-- **DnD kanban** on `/leads?view=kanban` — drag a card between outreach_status columns to update.
-- **Per-assignment audit log** — track who assigned what and when (separate table, not just current state).
-- **Leave-team self-service** for non-owners.
-- **Auto-redistribute leads on member removal** instead of dumping to Unassigned.
-- **Per-team email_account ownership transfer.**
-- **Deal pipeline** with stage values + close dates. Only if business model warrants.
-- **Billing.**
-- **Test framework** — deferred from Phase 8 explicitly. Revisit when first multi-team customer hits us.
-- **M27 Google Trends/News momentum** — still deferred from Phase 4C; revisit if reply-loop signal plateaus.
+### M63 — Cleanup, archive Phase 9
+- Delete `lib/hooks/use-{notes,followups,contact-mutations}.ts` (orphan after M62).
+- Final CONVENTIONS pass, update CLAUDE.md §6.
+- Archive doc.
 
-When a new phase starts, replace this file's contents with:
-- Goal + why now
-- Milestone list with verification criteria
-- Locked decisions (in scope vs explicitly deferred)
-- Budget expectations
+## Locked decisions
 
-When the phase ships, compress this file to ≤ 20 lines, move the full spec to `archive/phase-N-<name>.md`, and return this file to the standby state above.
+- M60 routes are the only ones being migrated. cron/test/track/unsub stay on their existing patterns deliberately.
+- `lib/plans.ts` becomes `lib/pipeline/plans.ts` rather than `lib/services/plans.ts` because it's invoked from cron + the planner service. The service layer wraps it; the file itself is pipeline-stage logic.
+- No new features in Phase 9. Deal pipeline / kanban DnD / audit log all wait for Phase 10+.

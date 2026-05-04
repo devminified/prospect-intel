@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type Ref } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
@@ -12,9 +12,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { useLeads } from '@/lib/queries/leads'
+import { useLeads, useMoveLead } from '@/lib/queries/leads'
 import { useCurrentTeam } from '@/lib/queries/team'
 import type {
+  DealStage,
+  KanbanGroupBy,
   Lead,
   OutreachState,
   SavedView,
@@ -23,6 +25,15 @@ import type {
   SortKey,
   ViewMode,
 } from '@/lib/types'
+import {
+  DndContext,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
 
 const STAGE_LABELS: Record<StageKey, string> = {
   all: 'All',
@@ -57,7 +68,7 @@ const OUTREACH_LABEL: Record<string, string> = {
   do_not_contact: 'DNC',
 }
 
-const KANBAN_COLUMNS: Array<{ key: string; label: string }> = [
+const KANBAN_OUTREACH_COLUMNS: Array<{ key: string; label: string }> = [
   { key: '__none__', label: 'No status' },
   { key: 'calling', label: 'Calling now' },
   { key: 'no_answer', label: 'No answer' },
@@ -67,6 +78,16 @@ const KANBAN_COLUMNS: Array<{ key: string; label: string }> = [
   { key: 'qualified', label: 'Qualified' },
   { key: 'not_interested', label: 'Not interested' },
   { key: 'do_not_contact', label: 'DNC' },
+]
+
+const KANBAN_DEAL_COLUMNS: Array<{ key: DealStage; label: string }> = [
+  { key: 'lead', label: 'Lead' },
+  { key: 'contacted', label: 'Contacted' },
+  { key: 'qualified', label: 'Qualified' },
+  { key: 'meeting', label: 'Meeting' },
+  { key: 'proposal', label: 'Proposal' },
+  { key: 'won', label: 'Won' },
+  { key: 'lost', label: 'Lost' },
 ]
 
 const SAVED_VIEWS_KEY = 'prospect-intel:saved-views'
@@ -91,6 +112,9 @@ export default function LeadsPage() {
   const [sort, setSort] = useState<SortKey>(initialSort)
   const [search, setSearch] = useState('')
   const [view, setView] = useState<ViewMode>('list')
+  const [groupBy, setGroupBy] = useState<KanbanGroupBy>(
+    (sp?.get('groupBy') as KanbanGroupBy | null) ?? 'outreach_status'
+  )
   const [assignee, setAssignee] = useState<string>(initialAssignee)
   const [savedViews, setSavedViews] = useState<SavedView[]>([])
 
@@ -170,12 +194,23 @@ export default function LeadsPage() {
     setSearch(v.search)
     setView(v.view)
     setAssignee(v.assignee ?? 'any')
+    setGroupBy(v.groupBy ?? 'outreach_status')
   }
 
   function saveCurrentView() {
     const name = window.prompt('Name this view (e.g. "My follow-ups"):')
     if (!name || !name.trim()) return
-    const v: SavedView = { name: name.trim(), stage, outreach, viewed, sort, search, view, assignee }
+    const v: SavedView = {
+      name: name.trim(),
+      stage,
+      outreach,
+      viewed,
+      sort,
+      search,
+      view,
+      assignee,
+      groupBy,
+    }
     const next = [...savedViews.filter((x) => x.name !== v.name), v]
     setSavedViews(next)
     try {
@@ -215,7 +250,28 @@ export default function LeadsPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <h1 className="text-2xl font-bold">Leads</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {view === 'kanban' && (
+            <div className="flex items-center gap-1 mr-2">
+              <span className="text-xs text-muted-foreground">Group by:</span>
+              <Button
+                variant={groupBy === 'outreach_status' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setGroupBy('outreach_status')}
+                title="Last call/email outcome"
+              >
+                Outreach
+              </Button>
+              <Button
+                variant={groupBy === 'deal_stage' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setGroupBy('deal_stage')}
+                title="CRM funnel stage"
+              >
+                Pipeline
+              </Button>
+            </div>
+          )}
           <Button variant={view === 'list' ? 'default' : 'outline'} size="sm" onClick={() => setView('list')}>
             List
           </Button>
@@ -358,7 +414,7 @@ export default function LeadsPage() {
           </CardContent>
         </Card>
       ) : (
-        <KanbanBoard leads={sorted} />
+        <KanbanBoard leads={sorted} groupBy={groupBy} />
       )}
     </div>
   )
@@ -403,60 +459,146 @@ function LeadRow({ lead: l }: { lead: Lead }) {
   )
 }
 
-function KanbanBoard({ leads }: { leads: Lead[] }) {
+function KanbanBoard({ leads, groupBy }: { leads: Lead[]; groupBy: KanbanGroupBy }) {
+  const moveLead = useMoveLead()
+  // Pointer activation distance lets click-through still navigate to the
+  // detail page; only an actual drag (>5px) starts the dnd-kit gesture.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+
+  const columns =
+    groupBy === 'deal_stage'
+      ? KANBAN_DEAL_COLUMNS.map((c) => ({ key: c.key as string, label: c.label }))
+      : KANBAN_OUTREACH_COLUMNS
+
   const grouped = useMemo(() => {
     const m = new Map<string, Lead[]>()
-    for (const c of KANBAN_COLUMNS) m.set(c.key, [])
+    for (const c of columns) m.set(c.key, [])
     for (const l of leads) {
-      const key = l.outreach_status ?? '__none__'
+      const key =
+        groupBy === 'deal_stage'
+          ? (l.deal_stage as string)
+          : (l.outreach_status ?? '__none__')
       if (!m.has(key)) m.set(key, [])
       m.get(key)!.push(l)
     }
     return m
-  }, [leads])
+  }, [leads, columns, groupBy])
+
+  function handleDragEnd(e: DragEndEvent) {
+    const leadId = String(e.active.id)
+    const targetCol = e.over ? String(e.over.id) : null
+    if (!targetCol) return
+    const lead = leads.find((l) => l.id === leadId)
+    if (!lead) return
+
+    if (groupBy === 'deal_stage') {
+      if (lead.deal_stage === targetCol) return
+      moveLead.mutate({ id: leadId, deal_stage: targetCol as DealStage })
+    } else {
+      const currentKey = lead.outreach_status ?? '__none__'
+      if (currentKey === targetCol) return
+      moveLead.mutate({
+        id: leadId,
+        outreach_status: targetCol === '__none__' ? null : targetCol,
+      })
+    }
+  }
 
   return (
-    <div className="overflow-x-auto pb-4">
-      <div className="flex gap-3 min-w-max">
-        {KANBAN_COLUMNS.map((col) => {
-          const items = grouped.get(col.key) ?? []
-          return (
-            <div key={col.key} className="w-[280px] shrink-0 bg-muted/30 rounded-md p-3 flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase text-muted-foreground">{col.label}</span>
-                <span className="text-xs text-muted-foreground">{items.length}</span>
-              </div>
-              {items.length === 0 ? (
-                <div className="text-xs text-muted-foreground italic py-2">empty</div>
-              ) : (
-                items.map((l) => (
-                  <Link
-                    key={l.id}
-                    href={`/prospects/${l.id}`}
-                    className={`block p-3 bg-background rounded-md border hover:bg-muted transition-colors ${
-                      l.last_viewed_at ? 'opacity-70' : ''
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <span className={`text-sm truncate ${l.last_viewed_at ? 'font-normal' : 'font-semibold'}`}>
-                        {l.name}
-                      </span>
-                      <span className="text-sm font-bold shrink-0">{l.opportunity_score ?? '—'}</span>
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground line-clamp-1">
-                      {[l.batch_city, l.batch_category].filter(Boolean).join(' · ')}
-                    </p>
-                    <div className="mt-1 flex flex-wrap items-center gap-1">
-                      <OutreachChips outreach={l.outreach} small />
-                    </div>
-                  </Link>
-                ))
-              )}
-            </div>
-          )
-        })}
+    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+      <div className="overflow-x-auto pb-4">
+        <div className="flex gap-3 min-w-max">
+          {columns.map((col) => (
+            <KanbanColumn
+              key={col.key}
+              columnKey={col.key}
+              label={col.label}
+              items={grouped.get(col.key) ?? []}
+            />
+          ))}
+        </div>
       </div>
+    </DndContext>
+  )
+}
+
+function KanbanColumn({
+  columnKey,
+  label,
+  items,
+}: {
+  columnKey: string
+  label: string
+  items: Lead[]
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: columnKey })
+  return (
+    <div
+      ref={setNodeRef}
+      className={`w-[280px] shrink-0 rounded-md p-3 flex flex-col gap-2 transition-colors ${
+        isOver ? 'bg-primary/10 ring-2 ring-primary/30' : 'bg-muted/30'
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold uppercase text-muted-foreground">{label}</span>
+        <span className="text-xs text-muted-foreground">{items.length}</span>
+      </div>
+      {items.length === 0 ? (
+        <div className="text-xs text-muted-foreground italic py-2">empty</div>
+      ) : (
+        items.map((l) => <KanbanCard key={l.id} lead={l} />)
+      )}
     </div>
+  )
+}
+
+function KanbanCard({ lead: l }: { lead: Lead }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: l.id,
+  })
+  const style = transform
+    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
+    : undefined
+  // While the user is actively dragging, render the inner card NOT as a
+  // <Link> so the pointer release doesn't trigger navigation. The 5px
+  // sensor distance handles the inverse — small clicks fall through.
+  const inner = (
+    <>
+      <div className="flex items-start justify-between gap-2">
+        <span className={`text-sm truncate ${l.last_viewed_at ? 'font-normal' : 'font-semibold'}`}>
+          {l.name}
+        </span>
+        <span className="text-sm font-bold shrink-0">{l.opportunity_score ?? '—'}</span>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground line-clamp-1">
+        {[l.batch_city, l.batch_category].filter(Boolean).join(' · ')}
+      </p>
+      <div className="mt-1 flex flex-wrap items-center gap-1">
+        <OutreachChips outreach={l.outreach} small />
+      </div>
+    </>
+  )
+  const cls = `block p-3 bg-background rounded-md border transition-colors ${
+    l.last_viewed_at ? 'opacity-70' : ''
+  } ${isDragging ? 'ring-2 ring-primary shadow-lg cursor-grabbing' : 'hover:bg-muted cursor-grab'}`
+  if (isDragging) {
+    return (
+      <div ref={setNodeRef} style={style} className={cls} {...listeners} {...attributes}>
+        {inner}
+      </div>
+    )
+  }
+  return (
+    <Link
+      ref={setNodeRef as unknown as Ref<HTMLAnchorElement>}
+      href={`/prospects/${l.id}`}
+      style={style}
+      className={cls}
+      {...listeners}
+      {...attributes}
+    >
+      {inner}
+    </Link>
   )
 }
 

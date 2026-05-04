@@ -1,8 +1,10 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase/client'
-import type { Lead, OutreachState } from '@/lib/types'
+import { apiPatch } from '@/lib/api-client'
+import type { DealStage, Lead, OutreachState } from '@/lib/types'
+import { queryKeys } from './keys'
 
 export type { Lead }
 
@@ -113,6 +115,60 @@ export function useLeads() {
           last_activity_at: null,
         },
       }))
+    },
+  })
+}
+
+/**
+ * Optimistically re-bucket a lead in the kanban cache, then PATCH. On
+ * failure the cache rolls back. Used by both kanban groupings — pass
+ * either `outreach_status` or `deal_stage` (or both, but UI sends one).
+ *
+ * The leads list query uses the loose `['leads']` key (legacy from
+ * Phase 5); we don't go through queryKeys here to keep that working.
+ */
+export function useMoveLead() {
+  const qc = useQueryClient()
+  return useMutation<
+    void,
+    Error,
+    { id: string; outreach_status?: string | null; deal_stage?: DealStage }
+  >({
+    mutationFn: async ({ id, outreach_status, deal_stage }) => {
+      const body: Record<string, unknown> = {}
+      if (outreach_status !== undefined) body.outreach_status = outreach_status
+      if (deal_stage !== undefined) body.deal_stage = deal_stage
+      await apiPatch(`/api/prospects/${id}`, body)
+    },
+    onMutate: async ({ id, outreach_status, deal_stage }) => {
+      const key = ['leads'] as const
+      await qc.cancelQueries({ queryKey: key })
+      const prior = qc.getQueryData<Lead[]>(key)
+      if (prior) {
+        qc.setQueryData<Lead[]>(
+          key,
+          prior.map((l) =>
+            l.id === id
+              ? {
+                  ...l,
+                  ...(outreach_status !== undefined ? { outreach_status } : {}),
+                  ...(deal_stage !== undefined ? { deal_stage } : {}),
+                }
+              : l
+          )
+        )
+      }
+      return { prior }
+    },
+    onError: (_err, _vars, ctx) => {
+      const prior = (ctx as { prior?: Lead[] } | undefined)?.prior
+      if (prior) qc.setQueryData(['leads'], prior)
+    },
+    onSettled: (_data, _err, vars) => {
+      void qc.invalidateQueries({ queryKey: ['leads'] })
+      // Also refresh the prospect aggregate so an open detail page picks
+      // up the new value next render.
+      void qc.invalidateQueries({ queryKey: queryKeys.prospect(vars.id) })
     },
   })
 }

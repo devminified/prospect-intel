@@ -139,6 +139,14 @@ export type ViewedKey = 'any' | 'viewed' | 'unviewed'
 export type SortKey = 'score' | 'last_activity' | 'unviewed_first' | 'created'
 export type ViewMode = 'list' | 'kanban'
 
+/**
+ * Which column key the kanban groups cards by. `outreach_status` is
+ * the M37 default — last-call outcome. `deal_stage` (Phase 10A) is the
+ * CRM funnel position. Saved views persist this so a user's "pipeline"
+ * view always reopens in the right grouping.
+ */
+export type KanbanGroupBy = 'outreach_status' | 'deal_stage'
+
 export interface SavedView {
   name: string
   stage: StageKey
@@ -148,6 +156,7 @@ export interface SavedView {
   search: string
   view: ViewMode
   assignee?: string
+  groupBy?: KanbanGroupBy
 }
 
 // ─── /plans list page ───────────────────────────────────────────────

@@ -24,6 +24,8 @@ export function useProspectDetail(prospectId: string) {
     enabled: !!prospectId,
     queryFn: async () => {
       const [pRes, eRes, aRes, pitchRes, cRes, vRes, rRes, nRes, fRes] = await Promise.all([
+        // Including deal_stage + deal_stage_changed_at via select('*')
+        // — Phase 10A column added in M64.
         supabase.from('prospects').select('*').eq('id', prospectId).single(),
         supabase.from('enrichments').select('*').eq('prospect_id', prospectId).maybeSingle(),
         supabase.from('analyses').select('*').eq('prospect_id', prospectId).maybeSingle(),

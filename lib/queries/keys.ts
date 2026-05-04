@@ -57,5 +57,9 @@ export const queryKeys = {
     contracts: (profileId: string, status: string | null) =>
       ['upwork', 'profile', profileId, 'contracts', status ?? 'any'] as const,
     contract: (id: string) => ['upwork', 'contract', id] as const,
+    profileDashboard: (profileId: string, days: number) =>
+      ['upwork', 'profile', profileId, 'dashboard', days] as const,
+    overview: (days: number) => ['upwork', 'overview', days] as const,
+    leaderboard: (days: number) => ['upwork', 'leaderboard', days] as const,
   },
 } as const

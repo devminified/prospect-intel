@@ -10,17 +10,25 @@ import { cn } from '@/lib/utils'
 import { useCurrentTeam } from '@/lib/queries/team'
 
 /**
- * Nav links + the role gate for each. `roles` is the allow-list — undefined
- * means "everyone on the team sees it". Mirrors the page-level RBAC: a
- * manager direct-navigating to /settings/email still sees a read-only
- * page (M70), but the nav doesn't advertise it.
+ * Nav links + the role gate for each. `roles` is the allow-list —
+ * undefined means "everyone on the team sees it". Mirrors the matrix
+ * in lib/rbac.ts:
+ *   - Plans / Batches / ICP belong to the `createWork` set: owners,
+ *     managers, and lead-gens (the people who configure the funnel).
+ *     Closers and cold-callers don't see these — they live in /leads.
+ *   - Email is owner-only: it's the team's outbound mailbox, the rest
+ *     of the team can see it's connected via /dashboard but can't
+ *     touch the connection itself.
+ *   - Dashboard / Leads / Team are visible to every role; the
+ *     pages themselves gate write actions.
  */
+const CREATE_WORK_ROLES = ['owner', 'manager', 'lead_gen']
 const NAV: Array<{ href: string; label: string; roles?: string[] }> = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/leads', label: 'Leads' },
-  { href: '/plans', label: 'Plans' },
-  { href: '/batches', label: 'Batches' },
-  { href: '/settings/icp', label: 'ICP' },
+  { href: '/plans', label: 'Plans', roles: CREATE_WORK_ROLES },
+  { href: '/batches', label: 'Batches', roles: CREATE_WORK_ROLES },
+  { href: '/settings/icp', label: 'ICP', roles: CREATE_WORK_ROLES },
   { href: '/settings/email', label: 'Email', roles: ['owner'] },
   { href: '/settings/team', label: 'Team' },
 ]

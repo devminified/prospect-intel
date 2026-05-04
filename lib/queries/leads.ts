@@ -2,34 +2,9 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase/client'
+import type { Lead, OutreachState } from '@/lib/types'
 
-interface OutreachState {
-  has_pitch: boolean
-  has_sent: boolean
-  has_real_open: boolean
-  has_reply: boolean
-  recommended_channel: 'phone' | 'email' | 'either' | null
-  last_activity_at: string | null
-}
-
-export interface Lead {
-  id: string
-  name: string
-  status: string
-  outreach_status: string | null
-  last_viewed_at: string | null
-  website: string | null
-  rating: number | null
-  review_count: number | null
-  created_at: string
-  batch_id: string
-  batch_city: string | null
-  batch_category: string | null
-  best_angle: string | null
-  opportunity_score: number | null
-  assigned_to: string | null
-  outreach: OutreachState
-}
+export type { Lead }
 
 /**
  * Aggregate query for /leads. Pulls prospects + pitches + recs in

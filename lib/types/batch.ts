@@ -28,3 +28,21 @@ export const BatchCreateInputSchema = z.object({
   pitch_score_threshold: z.number().int().min(0).max(100).nullable().optional(),
 })
 export type BatchCreateInput = z.infer<typeof BatchCreateInputSchema>
+
+/**
+ * Wire shape for `POST /api/batches` from the browser. Distinct from
+ * `BatchCreateInput` (which the server uses post-validation) because the
+ * client always sends every field — the server-side schema makes the
+ * optionals truly optional via `.optional()`.
+ */
+export interface CreateBatchClientInput {
+  city: string
+  category: string
+  count: number
+  auto_enrich_top_n: number
+  pitch_score_threshold: number | null
+}
+
+export interface CreateBatchResponse {
+  prospects_created: number
+}

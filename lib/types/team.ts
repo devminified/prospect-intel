@@ -76,3 +76,21 @@ export const OwnershipTransferInputSchema = z.object({
   user_id: z.string().uuid('user_id must be a uuid'),
 })
 export type OwnershipTransferInput = z.infer<typeof OwnershipTransferInputSchema>
+
+/**
+ * Aggregate returned by `GET /api/team` — the team row plus its
+ * members (with auth.users.email folded in) and pending invites, plus
+ * the caller's role on this team. Consumed by /settings/team and the
+ * `useCurrentTeam` query.
+ */
+export interface TeamView {
+  team: Team
+  members: TeamMemberWithEmail[]
+  invites: TeamInvite[]
+  my_role: Role
+}
+
+/** POST /api/team/invites response — redeem URL is shown in the UI when SMTP isn't configured. */
+export interface CreateInviteResponse {
+  redeem_url?: string
+}

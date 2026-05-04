@@ -5,25 +5,13 @@ import { analyzeProspect } from '@/lib/pipeline/analyze'
 import { discoverPeople } from '@/lib/contacts'
 import { auditVisibility } from '@/lib/pipeline/audit'
 import { generatePitch } from '@/lib/pipeline/pitch'
+import type { Job, JobType } from '@/lib/types'
 
 export const maxDuration = 60
 
 const JOBS_PER_RUN = 10
 const MAX_ATTEMPTS = 3
 const STUCK_JOB_THRESHOLD_MS = 2 * 60 * 1000  // reap running jobs older than 2 min
-
-type JobType = 'enrich' | 'analyze' | 'audit_visibility' | 'pitch' | 'discover_contacts'
-type JobStatus = 'pending' | 'running' | 'done' | 'failed'
-
-interface Job {
-  id: string
-  batch_id: string
-  prospect_id: string
-  job_type: JobType
-  status: JobStatus
-  attempts: number
-  last_error: string | null
-}
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization')

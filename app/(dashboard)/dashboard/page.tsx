@@ -4,16 +4,7 @@ import { useMemo } from 'react'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useDashboard } from '@/lib/queries/dashboard'
-
-interface Followup {
-  id: string
-  prospect_id: string
-  due_at: string
-  note: string | null
-  done: boolean
-  done_at: string | null
-  created_at: string
-}
+import type { DashFollowup as Followup } from '@/lib/types'
 
 export default function DashboardPage() {
   const { data, isLoading, error } = useDashboard()

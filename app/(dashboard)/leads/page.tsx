@@ -12,22 +12,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { useLeads, type Lead } from '@/lib/queries/leads'
+import { useLeads } from '@/lib/queries/leads'
 import { useCurrentTeam } from '@/lib/queries/team'
-
-interface OutreachState {
-  has_pitch: boolean
-  has_sent: boolean
-  has_real_open: boolean
-  has_reply: boolean
-  recommended_channel: 'phone' | 'email' | 'either' | null
-  last_activity_at: string | null
-}
-
-type StageKey = 'all' | 'no_outreach' | 'in_contact' | 'opened' | 'replied' | 'call_phase'
-type ViewedKey = 'any' | 'viewed' | 'unviewed'
-type SortKey = 'score' | 'last_activity' | 'unviewed_first' | 'created'
-type ViewMode = 'list' | 'kanban'
+import type {
+  Lead,
+  OutreachState,
+  SavedView,
+  StageKey,
+  ViewedKey,
+  SortKey,
+  ViewMode,
+} from '@/lib/types'
 
 const STAGE_LABELS: Record<StageKey, string> = {
   all: 'All',
@@ -73,17 +68,6 @@ const KANBAN_COLUMNS: Array<{ key: string; label: string }> = [
   { key: 'not_interested', label: 'Not interested' },
   { key: 'do_not_contact', label: 'DNC' },
 ]
-
-interface SavedView {
-  name: string
-  stage: StageKey
-  outreach: string
-  viewed: ViewedKey
-  sort: SortKey
-  search: string
-  view: ViewMode
-  assignee?: string
-}
 
 const SAVED_VIEWS_KEY = 'prospect-intel:saved-views'
 

@@ -1,107 +1,58 @@
 'use client'
 
-import { use, useEffect, useState } from 'react'
+import { use, useState } from 'react'
 import Link from 'next/link'
-import { supabase } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-
-interface Plan {
-  id: string
-  plan_date: string
-  status: string
-  rationale_json: { rationale?: string; today_iso?: string } | null
-  created_at: string
-  executed_at: string | null
-}
-
-interface PlanItem {
-  id: string
-  city: string
-  category: string
-  count: number
-  reasoning: string | null
-  priority: number
-  estimated_cost_usd: number | null
-  batch_id: string | null
-  executed_at: string | null
-}
+import { useExecutePlan, usePlanDetail } from '@/lib/queries/plans'
 
 export default function PlanDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
-  const [plan, setPlan] = useState<Plan | null>(null)
-  const [items, setItems] = useState<PlanItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [executing, setExecuting] = useState(false)
+  const detailQ = usePlanDetail(id)
+  const executeMut = useExecutePlan(id)
   const [executingItemId, setExecutingItemId] = useState<string | null>(null)
   const [message, setMessage] = useState('')
 
-  useEffect(() => {
-    load()
-  }, [id])
-
-  async function load() {
-    setLoading(true)
-    const [p, it] = await Promise.all([
-      supabase.from('lead_plans').select('*').eq('id', id).single(),
-      supabase.from('lead_plan_items').select('*').eq('plan_id', id).order('priority', { ascending: true }),
-    ])
-    if (p.error) {
-      setError(p.error.message)
-      setLoading(false)
-      return
-    }
-    setPlan(p.data as Plan)
-    setItems((it.data as PlanItem[]) ?? [])
-    setLoading(false)
-  }
-
-  async function authHeaders() {
-    const { data } = await supabase.auth.getSession()
-    return { Authorization: `Bearer ${data.session?.access_token ?? ''}` }
-  }
+  const plan = detailQ.data?.plan ?? null
+  const items = detailQ.data?.items ?? []
+  const loadError = detailQ.error?.message ?? ''
+  const execError = executeMut.error?.message ?? ''
+  const error = execError || loadError
 
   async function executeAll() {
-    setExecuting(true)
-    setError('')
     setMessage('')
     try {
-      const res = await fetch(`/api/plans/${id}/execute`, { method: 'POST', headers: await authHeaders() })
-      const body = await res.json()
-      if (!res.ok) throw new Error(body.error ?? 'execute failed')
-      setMessage(`Executed ${body.executed} of ${body.executed + body.skipped}${body.errors?.length ? ` (errors: ${body.errors.join('; ')})` : ''}`)
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setExecuting(false)
+      const body = await executeMut.mutateAsync({})
+      setMessage(
+        `Executed ${body.executed} of ${body.executed + body.skipped}` +
+          (body.errors?.length ? ` (errors: ${body.errors.join('; ')})` : '')
+      )
+    } catch {
+      // surfaced via executeMut.error
     }
   }
 
   async function executeOne(itemId: string) {
     setExecutingItemId(itemId)
-    setError('')
+    setMessage('')
     try {
-      const res = await fetch(`/api/plans/${id}/execute?item_id=${itemId}`, { method: 'POST', headers: await authHeaders() })
-      const body = await res.json()
-      if (!res.ok) throw new Error(body.error ?? 'execute failed')
-      await load()
-    } catch (e: any) {
-      setError(e.message)
+      await executeMut.mutateAsync({ itemId })
+    } catch {
+      // surfaced via executeMut.error
     } finally {
       setExecutingItemId(null)
     }
   }
 
-  if (loading) return <div className="text-muted-foreground">Loading…</div>
-  if (error && !plan) return <div className="text-destructive">{error}</div>
+  if (detailQ.isLoading) return <div className="text-muted-foreground">Loading…</div>
+  if (loadError && !plan) return <div className="text-destructive">{loadError}</div>
   if (!plan) return <div className="text-muted-foreground">Plan not found.</div>
 
   const totalCount = items.reduce((sum, it) => sum + it.count, 0)
   const totalCost = items.reduce((sum, it) => sum + Number(it.estimated_cost_usd ?? 0), 0)
   const anyUnexecuted = items.some((it) => !it.batch_id)
+  const executingAll = executeMut.isPending && !executingItemId
 
   return (
     <div className="space-y-6">
@@ -115,8 +66,8 @@ export default function PlanDetailPage({ params }: { params: Promise<{ id: strin
             </p>
           </div>
           {anyUnexecuted && (
-            <Button onClick={executeAll} disabled={executing} className="bg-green-600 hover:bg-green-700 text-white">
-              {executing ? 'Executing…' : 'Execute all'}
+            <Button onClick={executeAll} disabled={executingAll} className="bg-green-600 hover:bg-green-700 text-white">
+              {executingAll ? 'Executing…' : 'Execute all'}
             </Button>
           )}
         </div>
@@ -167,7 +118,7 @@ export default function PlanDetailPage({ params }: { params: Promise<{ id: strin
                 {!it.batch_id && (
                   <Button
                     onClick={() => executeOne(it.id)}
-                    disabled={executingItemId === it.id || executing}
+                    disabled={executingItemId === it.id || executingAll}
                     size="sm"
                   >
                     {executingItemId === it.id ? 'Running…' : 'Run this one'}

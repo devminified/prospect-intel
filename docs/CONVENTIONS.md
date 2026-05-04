@@ -143,6 +143,7 @@ No CI gate. If a change breaks the happy path, the next batch will surface it. T
 
 ## Anti-patterns — DO NOT
 
+- **Don't inline `interface` or `type` declarations in pages, queries, or routes.** Every shape lives in `lib/types/` (Zod schema + `z.infer` for data shapes; plain interface for aggregates that contain `Map` or other non-Zod-friendly fields). Pages/queries/routes import from `@/lib/types` and never declare their own. The one explicit exception: a private UI state-machine type used only inside one page (e.g. `type Status = 'loading' | 'ready' | …` for the redeem-invite page). Reason: Phase 9 found types living next to consumers caused duplicate, drifting definitions across the leads page, batch-detail page, and queries — single canonical home keeps shapes coherent. Last enforcement sweep: 2026-05-04.
 - **Don't inline prompt strings** in `api/` or `lib/<stage>.ts`. All prompts live in `lib/prompts.ts`.
 - **Don't call `supabaseAdmin` from client code.** Service role key must never reach the browser.
 - **Don't hand-edit an existing migration.** Schema changes go in a NEW timestamped file.

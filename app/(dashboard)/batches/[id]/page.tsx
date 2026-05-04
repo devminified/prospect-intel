@@ -6,15 +6,12 @@ import { supabase } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { useBatchDetail, type BatchProspect as Prospect } from '@/lib/queries/batch-detail'
-
-interface OutreachState {
-  has_pitch: boolean
-  has_sent: boolean
-  has_real_open: boolean
-  has_reply: boolean
-  recommended_channel: 'phone' | 'email' | 'either' | null
-}
+import { useBatchDetail } from '@/lib/queries/batch-detail'
+import type {
+  BatchProspect as Prospect,
+  OutreachState,
+  StageKey as FilterKey,
+} from '@/lib/types'
 
 const OUTREACH_LABEL: Record<string, string> = {
   calling: 'Calling now',
@@ -26,8 +23,6 @@ const OUTREACH_LABEL: Record<string, string> = {
   not_interested: 'Not interested',
   do_not_contact: 'DNC',
 }
-
-type FilterKey = 'all' | 'no_outreach' | 'in_contact' | 'opened' | 'replied' | 'call_phase'
 
 const FILTER_LABELS: Record<FilterKey, string> = {
   all: 'All',

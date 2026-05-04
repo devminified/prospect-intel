@@ -10,31 +10,26 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { toast } from '@/components/ui/sonner'
-
-interface EmailAccount {
-  id: string
-  email: string
-  display_name: string | null
-  daily_send_cap: number
-  sends_today: number
-  sends_reset_at: string | null
-  last_send_at: string | null
-  created_at: string
-  sender_title: string | null
-  sender_company: string | null
-  calendly_url: string | null
-  website_url: string | null
-}
+import {
+  useDisconnectEmailAccount,
+  useEmailAccount,
+  useUpdateCap,
+  useUpdateSignature,
+} from '@/lib/queries/email-account'
 
 export default function EmailSettingsPage() {
-  const [account, setAccount] = useState<EmailAccount | null>(null)
-  const [loading, setLoading] = useState(true)
+  const accountQ = useEmailAccount()
+  const updateSignature = useUpdateSignature()
+  const updateCap = useUpdateCap()
+  const disconnectMut = useDisconnectEmailAccount()
+
+  const account = accountQ.data ?? null
+
   const [cap, setCap] = useState(20)
   const [senderTitle, setSenderTitle] = useState('')
   const [senderCompany, setSenderCompany] = useState('Devminified')
   const [calendlyUrl, setCalendlyUrl] = useState('')
   const [websiteUrl, setWebsiteUrl] = useState('https://devminified.com')
-  const [savingSignature, setSavingSignature] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
   const params = useSearchParams()
 
@@ -43,80 +38,64 @@ export default function EmailSettingsPage() {
     const err = params.get('error')
     if (connected) toast.success('Zoho connected.')
     if (err) toast.error(err)
-    load()
   }, [params])
 
-  async function load() {
-    setLoading(true)
-    const { data: userData } = await supabase.auth.getUser()
-    setUserId(userData?.user?.id ?? null)
+  useEffect(() => {
+    void (async () => {
+      const { data } = await supabase.auth.getUser()
+      setUserId(data?.user?.id ?? null)
+    })()
+  }, [])
 
-    const { data } = await supabase
-      .from('email_accounts')
-      .select('*')
-      .eq('provider', 'zoho')
-      .maybeSingle()
-
-    if (data) {
-      const acct = data as EmailAccount
-      setAccount(acct)
-      setCap(acct.daily_send_cap)
-      setSenderTitle(acct.sender_title ?? '')
-      setSenderCompany(acct.sender_company ?? 'Devminified')
-      setCalendlyUrl(acct.calendly_url ?? '')
-      setWebsiteUrl(acct.website_url ?? 'https://devminified.com')
-    }
-    setLoading(false)
-  }
+  useEffect(() => {
+    if (!account) return
+    setCap(account.daily_send_cap)
+    setSenderTitle(account.sender_title ?? '')
+    setSenderCompany(account.sender_company ?? 'Devminified')
+    setCalendlyUrl(account.calendly_url ?? '')
+    setWebsiteUrl(account.website_url ?? 'https://devminified.com')
+  }, [account])
 
   async function saveSignature() {
     if (!account) return
-    setSavingSignature(true)
-    const { error } = await supabase
-      .from('email_accounts')
-      .update({
-        sender_title: senderTitle.trim() || null,
-        sender_company: senderCompany.trim() || null,
-        calendly_url: calendlyUrl.trim() || null,
-        website_url: websiteUrl.trim() || null,
+    try {
+      await updateSignature.mutateAsync({
+        id: account.id,
+        patch: {
+          sender_title: senderTitle.trim() || null,
+          sender_company: senderCompany.trim() || null,
+          calendly_url: calendlyUrl.trim() || null,
+          website_url: websiteUrl.trim() || null,
+        },
       })
-      .eq('id', account.id)
-    setSavingSignature(false)
-    if (error) {
-      toast.error(error.message)
-      return
+      toast.success('Signature saved.')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'save failed')
     }
-    toast.success('Signature saved.')
-    await load()
   }
 
   async function saveCap() {
     if (!account) return
-    const { error } = await supabase
-      .from('email_accounts')
-      .update({ daily_send_cap: cap })
-      .eq('id', account.id)
-    if (error) {
-      toast.error(error.message)
-      return
+    try {
+      await updateCap.mutateAsync({ id: account.id, cap })
+      toast.success('Daily cap updated.')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'save failed')
     }
-    toast.success('Daily cap updated.')
-    await load()
   }
 
   async function disconnect() {
     if (!account) return
     if (!confirm(`Disconnect ${account.email}? You will need to reconnect to send again.`)) return
-    const { error } = await supabase.from('email_accounts').delete().eq('id', account.id)
-    if (error) {
-      toast.error(error.message)
-      return
+    try {
+      await disconnectMut.mutateAsync(account.id)
+      toast.success('Disconnected.')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'disconnect failed')
     }
-    setAccount(null)
-    toast.success('Disconnected.')
   }
 
-  if (loading) return <div className="text-muted-foreground">Loading…</div>
+  if (accountQ.isLoading) return <div className="text-muted-foreground">Loading…</div>
 
   return (
     <div className="space-y-6">
@@ -185,7 +164,7 @@ export default function EmailSettingsPage() {
               </div>
 
               <div className="pt-2 border-t">
-                <Button variant="outline" size="sm" onClick={disconnect}>
+                <Button variant="outline" size="sm" onClick={disconnect} disabled={disconnectMut.isPending}>
                   Disconnect
                 </Button>
               </div>
@@ -277,8 +256,8 @@ export default function EmailSettingsPage() {
                 </div>
               </div>
 
-              <Button size="sm" onClick={saveSignature} disabled={savingSignature}>
-                {savingSignature ? 'Saving…' : 'Save signature'}
+              <Button size="sm" onClick={saveSignature} disabled={updateSignature.isPending}>
+                {updateSignature.isPending ? 'Saving…' : 'Save signature'}
               </Button>
             </CardContent>
           </Card>
@@ -304,7 +283,7 @@ export default function EmailSettingsPage() {
                 gets flagged well below that. For <code className="text-xs">devminified.com</code> (your
                 main domain) keep this conservative to protect sender reputation.
               </p>
-              <Button size="sm" onClick={saveCap} disabled={cap === account.daily_send_cap}>
+              <Button size="sm" onClick={saveCap} disabled={cap === account.daily_send_cap || updateCap.isPending}>
                 Save cap
               </Button>
             </CardContent>

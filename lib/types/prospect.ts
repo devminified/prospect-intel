@@ -86,6 +86,8 @@ export const OutreachStateSchema = z.object({
   has_real_open: z.boolean(),
   has_reply: z.boolean(),
   recommended_channel: z.enum(['phone', 'email', 'either']).nullable(),
+  // Some pages don't compute last_activity_at (only /leads cares about
+  // the sort key). Optional so dashboard / batch-detail can omit it.
   last_activity_at: z.string().nullable().optional(),
 })
 export type OutreachState = z.infer<typeof OutreachStateSchema>

@@ -2,28 +2,13 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { supabase } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
-
-interface Icp {
-  services: string[]
-  avg_deal_size: number | null
-  daily_capacity: number
-  preferred_cities: string[]
-  excluded_cities: string[]
-  min_gmb_rating: number | null
-  min_review_count: number | null
-  target_categories: string[]
-  require_linkedin: boolean
-  require_instagram: boolean
-  require_facebook: boolean
-  require_business_phone: boolean
-  require_reachable: boolean
-}
+import { useIcp, useSaveIcp } from '@/lib/queries/icp'
+import type { IcpFormState as Icp } from '@/lib/types'
 
 const EMPTY: Icp = {
   services: [],
@@ -42,58 +27,28 @@ const EMPTY: Icp = {
 }
 
 export default function IcpSettingsPage() {
+  const icpQ = useIcp()
+  const saveMut = useSaveIcp()
   const [icp, setIcp] = useState<Icp>(EMPTY)
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
 
   useEffect(() => {
-    load()
-  }, [])
+    if (icpQ.data?.icp) setIcp({ ...EMPTY, ...icpQ.data.icp })
+  }, [icpQ.data])
 
-  async function load() {
-    setLoading(true)
-    const { data: sessionData } = await supabase.auth.getSession()
-    const token = sessionData.session?.access_token
-    if (!token) {
-      setError('Not signed in')
-      setLoading(false)
-      return
-    }
-    const res = await fetch('/api/icp', { headers: { Authorization: `Bearer ${token}` } })
-    const body = await res.json()
-    if (res.ok && body.icp) {
-      setIcp({ ...EMPTY, ...body.icp })
-    }
-    setLoading(false)
-  }
+  const error = saveMut.error?.message ?? icpQ.error?.message ?? ''
 
   async function save() {
-    setSaving(true)
     setMessage('')
-    setError('')
     try {
-      const { data: sessionData } = await supabase.auth.getSession()
-      const token = sessionData.session?.access_token
-      const res = await fetch('/api/icp', {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(icp),
-      })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: 'save failed' }))
-        throw new Error(body.error ?? 'save failed')
-      }
+      await saveMut.mutateAsync(icp)
       setMessage('Saved.')
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setSaving(false)
+    } catch {
+      // surfaced via saveMut.error
     }
   }
 
-  if (loading) return <div className="text-muted-foreground">Loading…</div>
+  if (icpQ.isLoading) return <div className="text-muted-foreground">Loading…</div>
 
   return (
     <div className="space-y-6">
@@ -230,8 +185,8 @@ export default function IcpSettingsPage() {
           <Separator />
 
           <div>
-            <Button onClick={save} disabled={saving}>
-              {saving ? 'Saving…' : 'Save ICP'}
+            <Button onClick={save} disabled={saveMut.isPending}>
+              {saveMut.isPending ? 'Saving…' : 'Save ICP'}
             </Button>
           </div>
         </CardContent>

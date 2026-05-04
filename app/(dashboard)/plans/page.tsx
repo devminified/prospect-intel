@@ -1,32 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { supabase } from '@/lib/supabase/client'
+import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-
-interface Plan {
-  id: string
-  plan_date: string
-  status: string
-  created_at: string
-  executed_at: string | null
-}
-
-interface PerformanceRow {
-  category: string
-  city: string
-  sent: number
-  replies: number
-  interested: number
-  not_interested: number
-  unsub: number
-  reply_rate: number
-  interested_rate: number
-  unsub_rate: number
-}
+import { useGeneratePlan, usePerformance, usePlans } from '@/lib/queries/plans'
 
 const STATUS_VARIANT: Record<string, 'default' | 'secondary' | 'outline'> = {
   executed: 'default',
@@ -35,61 +14,22 @@ const STATUS_VARIANT: Record<string, 'default' | 'secondary' | 'outline'> = {
 }
 
 export default function PlansPage() {
-  const [plans, setPlans] = useState<Plan[]>([])
-  const [performance, setPerformance] = useState<PerformanceRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [generating, setGenerating] = useState(false)
-  const [error, setError] = useState('')
+  const router = useRouter()
+  const plansQ = usePlans()
+  const perfQ = usePerformance(30)
+  const generateMut = useGeneratePlan()
 
-  useEffect(() => {
-    load()
-  }, [])
-
-  async function load() {
-    setLoading(true)
-    const [{ data, error }, perfRes] = await Promise.all([
-      supabase
-        .from('lead_plans')
-        .select('id, plan_date, status, created_at, executed_at')
-        .order('created_at', { ascending: false }),
-      (async () => {
-        const { data: sessionData } = await supabase.auth.getSession()
-        const token = sessionData.session?.access_token
-        if (!token) return null
-        const res = await fetch('/api/performance?days=30', {
-          headers: { Authorization: `Bearer ${token}` },
-        })
-        if (!res.ok) return null
-        return res.json()
-      })(),
-    ])
-    if (error) {
-      setError(error.message)
-    } else {
-      setPlans((data as Plan[]) ?? [])
-    }
-    if (perfRes?.rows) setPerformance(perfRes.rows as PerformanceRow[])
-    setLoading(false)
-  }
+  const plans = plansQ.data ?? []
+  const performance = perfQ.data ?? []
+  const loading = plansQ.isLoading
+  const error = generateMut.error?.message ?? plansQ.error?.message ?? ''
 
   async function generate() {
-    setGenerating(true)
-    setError('')
     try {
-      const { data: sessionData } = await supabase.auth.getSession()
-      const token = sessionData.session?.access_token
-      if (!token) throw new Error('Not signed in')
-      const res = await fetch('/api/plans', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      const body = await res.json()
-      if (!res.ok) throw new Error(body.error ?? 'generate failed')
-      window.location.href = `/plans/${body.plan_id}`
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setGenerating(false)
+      const body = await generateMut.mutateAsync()
+      router.push(`/plans/${body.plan_id}`)
+    } catch {
+      // surfaced via generateMut.error
     }
   }
 
@@ -105,8 +45,8 @@ export default function PlansPage() {
             <Link href="/settings/icp" className="ml-2 text-primary hover:underline">Edit ICP →</Link>
           </p>
         </div>
-        <Button onClick={generate} disabled={generating}>
-          {generating ? 'Generating…' : "Generate today's plan"}
+        <Button onClick={generate} disabled={generateMut.isPending}>
+          {generateMut.isPending ? 'Generating…' : "Generate today's plan"}
         </Button>
       </div>
 

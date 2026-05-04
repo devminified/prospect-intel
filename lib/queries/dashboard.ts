@@ -2,47 +2,13 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase/client'
-
-interface ProspectLite {
-  id: string
-  name: string
-  status: string
-  outreach_status: string | null
-  last_viewed_at: string | null
-}
-
-interface DashFollowup {
-  id: string
-  prospect_id: string
-  due_at: string
-  note: string | null
-  done: boolean
-  done_at: string | null
-  created_at: string
-}
-
-interface OutreachState {
-  has_pitch: boolean
-  has_sent: boolean
-  has_real_open: boolean
-  has_reply: boolean
-  recommended_channel: 'phone' | 'email' | 'either' | null
-}
-
-interface ActivityEvent {
-  ts: string
-  icon: string
-  text: string
-  prospectId: string
-  cls?: string
-}
-
-interface DashboardData {
-  prospects: ProspectLite[]
-  followups: DashFollowup[]
-  stateByProspect: Map<string, OutreachState>
-  events: ActivityEvent[]
-}
+import type {
+  ActivityEvent,
+  DashFollowup,
+  DashboardData,
+  OutreachState,
+  ProspectLite,
+} from '@/lib/types'
 
 /**
  * Aggregate query for /dashboard. Pulls prospects + pitches + recs +

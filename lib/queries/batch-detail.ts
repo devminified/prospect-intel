@@ -2,45 +2,14 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase/client'
+import type {
+  BatchDetail,
+  BatchHeader,
+  BatchProspect,
+  OutreachState,
+} from '@/lib/types'
 
-interface OutreachState {
-  has_pitch: boolean
-  has_sent: boolean
-  has_real_open: boolean
-  has_reply: boolean
-  recommended_channel: 'phone' | 'email' | 'either' | null
-}
-
-export interface BatchProspect {
-  id: string
-  name: string
-  status: string
-  website: string | null
-  rating: number | null
-  review_count: number | null
-  outreach_status: string | null
-  last_viewed_at: string | null
-  analyses: { opportunity_score: number | null; best_angle: string | null } | null
-  last_error?: string | null
-  failed_stage?: string | null
-  outreach: OutreachState
-}
-
-export interface BatchHeader {
-  id: string
-  city: string
-  category: string
-  count_requested: number
-  count_completed: number
-  count_filtered_below_icp: number
-  count_duplicates_skipped: number
-  status: string
-}
-
-export interface BatchDetail {
-  batch: BatchHeader
-  prospects: BatchProspect[]
-}
+export type { BatchDetail, BatchHeader, BatchProspect }
 
 /**
  * Aggregate query for /batches/[id]. Fetches batch header + prospects +

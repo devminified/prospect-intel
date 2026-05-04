@@ -8,8 +8,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import { useNotes, type Note } from '@/lib/hooks/use-notes'
-import { useFollowups, type Followup } from '@/lib/hooks/use-followups'
+import { useNotes } from '@/lib/hooks/use-notes'
+import { useFollowups } from '@/lib/hooks/use-followups'
 import { useContactMutations } from '@/lib/hooks/use-contact-mutations'
 import { authHeaders } from '@/lib/auth-headers'
 import {
@@ -19,133 +19,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-
-interface PainPoint {
-  pain: string
-  evidence: string
-  solution_category: string
-  effort: string
-  impact: string
-}
-
-interface Contact {
-  id: string
-  full_name: string | null
-  title: string | null
-  seniority: string | null
-  department: string | null
-  email: string | null
-  email_confidence: string | null
-  phone: string | null
-  phone_source: string | null
-  linkedin_url: string | null
-  is_primary: boolean
-}
-
-interface Audit {
-  gmb_rating: number | null
-  gmb_review_count: number | null
-  gmb_photo_count: number | null
-  gmb_review_highlights_json: string[] | null
-  social_links_json: Record<string, string | null> | null
-  instagram_followers: number | null
-  facebook_followers: number | null
-  serp_rank_main: number | null
-  serp_rank_brand: number | null
-  meta_ads_running: boolean | null
-  meta_ads_count: number | null
-  press_mentions_count: number | null
-  press_mentions_sample_json: Array<{ title: string; source?: string; link?: string; date?: string }> | null
-  visibility_summary: string | null
-}
-
-interface Recommendation {
-  phone_fit_score: number
-  email_fit_score: number
-  recommended_channel: 'phone' | 'email' | 'either'
-  reasoning: string | null
-  phone_script: string | null
-  generated_at: string | null
-}
-
-interface SentEmail {
-  id: string
-  to_email: string
-  sent_at: string
-  bounced: boolean
-  bounce_reason: string | null
-  email_opens: Array<{ opened_at: string; is_probably_mpp: boolean; is_probably_self: boolean }>
-  email_replies: Array<{ received_at: string | null; classification: string | null }>
-}
-
-// Note + Followup interfaces are defined in their respective hook modules
-// and imported below; the page just re-uses those shapes.
-
-interface ActivityEvent {
-  ts: string
-  icon: string
-  text: string
-  cls?: string
-}
-
-interface SentEmailLite {
-  id: string
-  to_email: string | null
-  sent_at: string | null
-  bounced: boolean | null
-  email_opens: Array<{ opened_at: string; is_probably_mpp: boolean; is_probably_self: boolean }>
-  email_replies: Array<{ received_at: string | null; classification: string | null }>
-}
-
-interface Detail {
-  prospect: {
-    id: string
-    name: string
-    batch_id: string
-    status: string
-    outreach_status: string | null
-    assigned_to: string | null
-    assigned_at: string | null
-    last_viewed_at: string | null
-    website: string | null
-    address: string | null
-    phone: string | null
-    email: string | null
-    rating: number | null
-    review_count: number | null
-    categories_text: string | null
-    filter_reason: string | null
-  }
-  enrichment: {
-    tech_stack_json: any
-    has_online_booking: boolean | null
-    has_ecommerce: boolean | null
-    has_chat: boolean | null
-    has_contact_form: boolean | null
-    is_mobile_friendly: boolean | null
-    ssl_valid: boolean | null
-    fetch_error: string | null
-  } | null
-  analysis: {
-    pain_points_json: PainPoint[] | null
-    opportunity_score: number | null
-    best_angle: string | null
-  } | null
-  pitch: {
-    subject: string | null
-    body: string | null
-    edited_body: string | null
-    status: string
-  } | null
-  contacts: Contact[]
-  audit: Audit | null
-  recommendation: Recommendation | null
-  sentEmail: SentEmail | null
-  notes: Note[]
-  followups: Followup[]
-  allSentEmails: SentEmailLite[]
-  prospectCreatedAt: string | null
-}
+import type {
+  Note,
+  Followup,
+  DetailPainPoint as PainPoint,
+  ProspectContact as Contact,
+  DetailVisibilityAudit as Audit,
+  ChannelRecommendationView as Recommendation,
+  SentEmailDetail as SentEmail,
+  SentEmailLite,
+  ProspectActivityEvent as ActivityEvent,
+  ProspectDetail as Detail,
+} from '@/lib/types'
 
 const PROSPECT_STATUSES = ['new', 'enriched', 'analyzed', 'ready', 'contacted', 'replied', 'rejected', 'filtered_out']
 

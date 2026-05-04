@@ -1,16 +1,17 @@
 import { supabaseAdmin } from '@/lib/supabase/server'
-import { ExternalAPIError } from './errors'
-import { lushaFindPerson, bestPhone } from './lusha'
+import {
+  APOLLO_MAX_CONTACTS,
+  apolloPeopleMatch,
+  apolloPeopleSearch,
+  type ApolloPerson,
+} from '../apollo'
+import { lushaFindPerson, bestPhone } from '../lusha'
 
-if (!process.env.APOLLO_API_KEY) {
-  throw new Error('Missing env.APOLLO_API_KEY')
-}
-
-const API_KEY = process.env.APOLLO_API_KEY
-const PROVIDER = 'Apollo'
-const APOLLO_BASE = 'https://api.apollo.io/api/v1'
-
-const MAX_CONTACTS = 10
+/**
+ * Contact orchestration — high-level functions that own a write to the
+ * `contacts` table. The pure Apollo HTTP layer lives in `lib/apollo/`,
+ * the Lusha layer in `lib/lusha/`. This file glues them to our schema.
+ */
 
 /**
  * Fine-grained ranking used to pick the PRIMARY contact for outreach.
@@ -46,20 +47,6 @@ function inferSeniority(title: string | null | undefined): string {
   if (/\bdirector\b/.test(t)) return 'director'
   if (/\bmanager\b/.test(t)) return 'manager'
   return 'other'
-}
-
-interface ApolloPerson {
-  id?: string
-  name?: string
-  first_name?: string
-  last_name?: string
-  title?: string
-  seniority?: string
-  departments?: string[]
-  email?: string | null
-  email_status?: string
-  linkedin_url?: string
-  organization?: { name?: string; website_url?: string }
 }
 
 interface ContactInsert {
@@ -124,7 +111,7 @@ export async function discoverPeople(prospectId: string): Promise<void> {
   const people = await apolloPeopleSearch(domain)
   if (people.length === 0) return
 
-  const rows: ContactInsert[] = people.slice(0, MAX_CONTACTS).map((p) => {
+  const rows: ContactInsert[] = people.slice(0, APOLLO_MAX_CONTACTS).map((p: ApolloPerson) => {
     // Apollo returns first_name + last_name as separate fields on the search
     // response — preserve them rather than collapsing into full_name and
     // losing the split. Lusha's matcher needs lastName to be reliable.
@@ -332,66 +319,6 @@ export async function findDirectLine(
   return { phone }
 }
 
-async function apolloPeopleSearch(domain: string): Promise<ApolloPerson[]> {
-  const res = await fetch(`${APOLLO_BASE}/mixed_people/api_search`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-cache',
-      'X-Api-Key': API_KEY,
-    },
-    body: JSON.stringify({
-      q_organization_domains: domain,
-      person_seniorities: ['owner', 'founder', 'c_suite', 'vp', 'director', 'manager'],
-      page: 1,
-      per_page: MAX_CONTACTS,
-    }),
-  })
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    const snippet = extractSnippet(body)
-    throw new ExternalAPIError(PROVIDER, `peopleSearch failed: ${snippet}`, res.status)
-  }
-  const data = await res.json()
-  const people = Array.isArray(data?.people) ? data.people : []
-  const contacts = Array.isArray(data?.contacts) ? data.contacts : []
-  return [...people, ...contacts]
-}
-
-interface ApolloMatchResult {
-  email?: string | null
-  email_status?: string
-}
-
-async function apolloPeopleMatch(personId: string): Promise<ApolloMatchResult | null> {
-  const res = await fetch(`${APOLLO_BASE}/people/match`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-cache',
-      'X-Api-Key': API_KEY,
-    },
-    body: JSON.stringify({
-      id: personId,
-      reveal_personal_emails: false,
-      reveal_phone_number: false,
-    }),
-  })
-
-  if (!res.ok) {
-    const errBody = await res.text().catch(() => '')
-    throw new ExternalAPIError(PROVIDER, `peopleMatch failed: ${extractSnippet(errBody)}`, res.status)
-  }
-  const data = await res.json()
-  const person = data?.person
-  if (!person) return null
-  return {
-    email: person.email ?? null,
-    email_status: person.email_status,
-  }
-}
-
 function extractDomain(website: string | null): string | null {
   if (!website) return null
   try {
@@ -412,13 +339,4 @@ function mapConfidence(status?: string): string | null {
   if (status === 'verified') return 'verified'
   if (status === 'guessed' || status === 'likely') return 'guessed'
   return 'unverified'
-}
-
-function extractSnippet(body: string): string {
-  try {
-    const parsed = JSON.parse(body)
-    return parsed?.error ?? parsed?.message ?? body.slice(0, 200)
-  } catch {
-    return body.slice(0, 200) || 'no body'
-  }
 }

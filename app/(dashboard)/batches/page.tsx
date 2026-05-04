@@ -1,23 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
-import { supabase } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-
-interface Batch {
-  id: string
-  city: string
-  category: string
-  count_requested: number
-  count_completed: number
-  status: string
-  created_at: string
-}
+import { useBatches, useCreateBatch } from '@/lib/queries/batches'
 
 const STATUS_VARIANT: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
   done: 'default',
@@ -31,64 +21,34 @@ export default function BatchesPage() {
   const [count, setCount] = useState(10)
   const [autoEnrichTopN, setAutoEnrichTopN] = useState(0)
   const [pitchScoreThreshold, setPitchScoreThreshold] = useState<string>('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
-  const [batches, setBatches] = useState<Batch[]>([])
 
-  useEffect(() => {
-    loadBatches()
-  }, [])
+  const batchesQ = useBatches()
+  const createMut = useCreateBatch()
+  const batches = batchesQ.data ?? []
+  const loadError = batchesQ.error ? batchesQ.error.message : ''
+  const submitError = createMut.error ? createMut.error.message : ''
+  const error = submitError || loadError
 
-  async function loadBatches() {
-    const { data, error } = await supabase
-      .from('batches')
-      .select('id, city, category, count_requested, count_completed, status, created_at')
-      .order('created_at', { ascending: false })
-    if (error) {
-      setError(`Failed to load batches: ${error.message}`)
-      return
-    }
-    setBatches((data as Batch[]) ?? [])
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setLoading(true)
-    setError('')
     setSuccess('')
-
     try {
-      const { data: sessionData } = await supabase.auth.getSession()
-      const accessToken = sessionData.session?.access_token
-      if (!accessToken) throw new Error('Not signed in')
-
-      const response = await fetch('/api/batches', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-        body: JSON.stringify({
-          city,
-          category,
-          count,
-          auto_enrich_top_n: autoEnrichTopN,
-          pitch_score_threshold: pitchScoreThreshold === '' ? null : Number(pitchScoreThreshold),
-        }),
+      const data = await createMut.mutateAsync({
+        city,
+        category,
+        count,
+        auto_enrich_top_n: autoEnrichTopN,
+        pitch_score_threshold: pitchScoreThreshold === '' ? null : Number(pitchScoreThreshold),
       })
-
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.error || 'Failed to create batch')
-
       setSuccess(`Successfully created batch with ${data.prospects_created} prospects!`)
-      await loadBatches()
       setCity('')
       setCategory('')
       setCount(10)
       setAutoEnrichTopN(0)
       setPitchScoreThreshold('')
-    } catch (error: any) {
-      setError(error.message)
-    } finally {
-      setLoading(false)
+    } catch {
+      // error surfaced via createMut.error
     }
   }
 
@@ -134,8 +94,8 @@ export default function BatchesPage() {
               </div>
             </div>
 
-            <Button type="submit" disabled={loading}>
-              {loading ? 'Creating…' : 'Create Batch'}
+            <Button type="submit" disabled={createMut.isPending}>
+              {createMut.isPending ? 'Creating…' : 'Create Batch'}
             </Button>
           </form>
 
@@ -153,7 +113,9 @@ export default function BatchesPage() {
           <CardTitle>Your Batches</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {batches.length === 0 ? (
+          {batchesQ.isLoading ? (
+            <div className="p-6 text-center text-muted-foreground text-sm">Loading…</div>
+          ) : batches.length === 0 ? (
             <div className="p-6 text-center text-muted-foreground text-sm">
               No batches created yet. Create your first batch above!
             </div>

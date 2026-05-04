@@ -40,3 +40,29 @@ export const IcpPatchInputSchema = z.object({
   require_reachable: z.boolean().default(false),
 })
 export type IcpPatchInput = z.infer<typeof IcpPatchInputSchema>
+
+/**
+ * UI-form shape for the /settings/icp page. Slimmer than `IcpProfile`
+ * (no user_id / team_id / updated_at — those are server-managed and not
+ * part of the form state). Used as the page's local `useState` shape.
+ */
+export interface IcpFormState {
+  services: string[]
+  avg_deal_size: number | null
+  daily_capacity: number
+  preferred_cities: string[]
+  excluded_cities: string[]
+  min_gmb_rating: number | null
+  min_review_count: number | null
+  target_categories: string[]
+  require_linkedin: boolean
+  require_instagram: boolean
+  require_facebook: boolean
+  require_business_phone: boolean
+  require_reachable: boolean
+}
+
+/** GET /api/icp wire shape — `icp` is undefined when none is saved yet. */
+export interface IcpResponse {
+  icp?: Partial<IcpFormState>
+}

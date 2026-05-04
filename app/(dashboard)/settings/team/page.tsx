@@ -10,31 +10,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { authHeaders } from '@/lib/auth-headers'
-
-interface Member {
-  user_id: string
-  role: string
-  joined_at: string
-  email: string | null
-  is_self: boolean
-}
-
-interface Invite {
-  id: string
-  email: string
-  role: string
-  token: string
-  expires_at: string
-  created_at: string
-}
-
-interface TeamData {
-  team: { id: string; name: string; created_at: string }
-  members: Member[]
-  invites: Invite[]
-  my_role: string | null
-}
+import {
+  useChangeMemberRole,
+  useCreateInvite,
+  useCurrentTeam,
+  useRemoveMember,
+  useRenameTeam,
+  useRevokeInvite,
+  useTransferOwnership,
+} from '@/lib/queries/team'
+import type {
+  TeamMemberWithEmail as Member,
+} from '@/lib/types'
 
 const INVITE_ROLES: Array<{ value: string; label: string }> = [
   { value: 'manager', label: 'Manager' },
@@ -52,88 +39,54 @@ const ROLE_LABEL: Record<string, string> = {
 }
 
 export default function TeamSettingsPage() {
-  const [data, setData] = useState<TeamData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const teamQ = useCurrentTeam()
+  const renameMut = useRenameTeam()
+  const inviteMut = useCreateInvite()
+  const revokeMut = useRevokeInvite()
+  const roleMut = useChangeMemberRole()
+  const removeMut = useRemoveMember()
+  const transferMut = useTransferOwnership()
+
+  const data = teamQ.data ?? null
+
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState('lead_gen')
-  const [inviting, setInviting] = useState(false)
-  const [renaming, setRenaming] = useState(false)
   const [newName, setNewName] = useState('')
   const [editingName, setEditingName] = useState(false)
   const [lastRedeemUrl, setLastRedeemUrl] = useState<string | null>(null)
   const [copiedAt, setCopiedAt] = useState<string | null>(null)
 
   useEffect(() => {
-    void load()
-  }, [])
+    if (data) setNewName(data.team.name)
+  }, [data])
 
-  async function load() {
-    setLoading(true)
-    setError('')
-    try {
-      const headers = await authHeaders()
-      const res = await fetch('/api/team', { headers })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'team load failed' }))
-        throw new Error(err.error ?? 'team load failed')
-      }
-      const json = (await res.json()) as TeamData
-      setData(json)
-      setNewName(json.team.name)
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
-    }
-  }
+  const error =
+    renameMut.error?.message ??
+    inviteMut.error?.message ??
+    revokeMut.error?.message ??
+    roleMut.error?.message ??
+    removeMut.error?.message ??
+    transferMut.error?.message ??
+    teamQ.error?.message ??
+    ''
 
   async function rename() {
-    setRenaming(true)
-    setError('')
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch('/api/team', {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ name: newName.trim() }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'rename failed' }))
-        throw new Error(err.error ?? 'rename failed')
-      }
+      await renameMut.mutateAsync({ name: newName.trim() })
       setEditingName(false)
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setRenaming(false)
+    } catch {
+      // surfaced via renameMut.error
     }
   }
 
   async function sendInvite() {
-    setInviting(true)
-    setError('')
     setLastRedeemUrl(null)
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch('/api/team/invites', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'invite failed' }))
-        throw new Error(err.error ?? 'invite failed')
-      }
-      const json = await res.json()
+      const json = await inviteMut.mutateAsync({ email: inviteEmail.trim(), role: inviteRole })
       setLastRedeemUrl(json.redeem_url ?? null)
       setInviteEmail('')
-      await load()
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setInviting(false)
+    } catch {
+      // surfaced via inviteMut.error
     }
   }
 
@@ -144,20 +97,10 @@ export default function TeamSettingsPage() {
       )
     )
       return
-    setError('')
     try {
-      const headers = await authHeaders()
-      const res = await fetch(`/api/team/members/${member.user_id}`, {
-        method: 'DELETE',
-        headers,
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'remove failed' }))
-        throw new Error(err.error ?? 'remove failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
+      await removeMut.mutateAsync(member.user_id)
+    } catch {
+      // surfaced via removeMut.error
     }
   }
 
@@ -168,69 +111,37 @@ export default function TeamSettingsPage() {
       )
     )
       return
-    setError('')
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch('/api/team/transfer-ownership', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ user_id: member.user_id }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'transfer failed' }))
-        throw new Error(err.error ?? 'transfer failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
+      await transferMut.mutateAsync(member.user_id)
+    } catch {
+      // surfaced via transferMut.error
     }
   }
 
   async function changeRole(member: Member, newRole: string) {
-    setError('')
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/team/members/${member.user_id}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ role: newRole }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'role change failed' }))
-        throw new Error(err.error ?? 'role change failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
+      await roleMut.mutateAsync({ userId: member.user_id, role: newRole })
+    } catch {
+      // surfaced via roleMut.error
     }
   }
 
   async function revoke(inviteId: string) {
     if (!confirm('Revoke this invite? The recipient will no longer be able to redeem it.')) return
-    setError('')
     try {
-      const headers = await authHeaders()
-      const res = await fetch(`/api/team/invites?id=${inviteId}`, {
-        method: 'DELETE',
-        headers,
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'revoke failed' }))
-        throw new Error(err.error ?? 'revoke failed')
-      }
-      await load()
-    } catch (e: any) {
-      setError(e.message)
+      await revokeMut.mutateAsync(inviteId)
+    } catch {
+      // surfaced via revokeMut.error
     }
   }
 
   function copy(url: string) {
-    navigator.clipboard.writeText(url).then(() => {
+    void navigator.clipboard.writeText(url).then(() => {
       setCopiedAt(new Date().toLocaleTimeString())
     })
   }
 
-  if (loading) return <div className="text-muted-foreground">Loading team…</div>
+  if (teamQ.isLoading) return <div className="text-muted-foreground">Loading team…</div>
   if (!data) {
     return (
       <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-md text-destructive text-sm">
@@ -270,8 +181,8 @@ export default function TeamSettingsPage() {
                 onChange={(e) => setNewName(e.target.value)}
                 className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring min-w-[260px]"
               />
-              <Button size="sm" onClick={rename} disabled={renaming || !newName.trim()}>
-                {renaming ? 'Saving…' : 'Save'}
+              <Button size="sm" onClick={rename} disabled={renameMut.isPending || !newName.trim()}>
+                {renameMut.isPending ? 'Saving…' : 'Save'}
               </Button>
               <Button variant="ghost" size="sm" onClick={() => { setEditingName(false); setNewName(data.team.name) }}>
                 Cancel
@@ -373,8 +284,8 @@ export default function TeamSettingsPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <Button size="sm" onClick={sendInvite} disabled={inviting || !inviteEmail.trim()}>
-                {inviting ? 'Sending…' : 'Send invite'}
+              <Button size="sm" onClick={sendInvite} disabled={inviteMut.isPending || !inviteEmail.trim()}>
+                {inviteMut.isPending ? 'Sending…' : 'Send invite'}
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">

@@ -24,4 +24,18 @@ export const queryKeys = {
   team: {
     current: () => ['team', 'current'] as const,
   },
+  batches: {
+    list: () => ['batches', 'list'] as const,
+  },
+  plans: {
+    list: () => ['plans', 'list'] as const,
+    detail: (id: string) => ['plans', 'detail', id] as const,
+    performance: (days: number) => ['plans', 'performance', days] as const,
+  },
+  icp: {
+    current: () => ['icp', 'current'] as const,
+  },
+  emailAccount: {
+    current: () => ['emailAccount', 'current'] as const,
+  },
 } as const

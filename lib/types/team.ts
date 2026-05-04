@@ -67,8 +67,13 @@ export const InviteRedeemInputSchema = z.object({
 })
 export type InviteRedeemInput = z.infer<typeof InviteRedeemInputSchema>
 
+/**
+ * Role transitions accepted by `PATCH /api/team/members/[id]`. Includes
+ * 'owner' for promotions; service layer enforces the ≤2-owner cap and
+ * the rule that only existing owners can promote/demote owners.
+ */
 export const RoleChangeInputSchema = z.object({
-  role: z.enum(['manager', 'lead_gen', 'cold_caller', 'closer']),
+  role: z.enum(['owner', 'manager', 'lead_gen', 'cold_caller', 'closer']),
 })
 export type RoleChangeInput = z.infer<typeof RoleChangeInputSchema>
 
@@ -93,4 +98,32 @@ export interface TeamView {
 /** POST /api/team/invites response — redeem URL is shown in the UI when SMTP isn't configured. */
 export interface CreateInviteResponse {
   redeem_url?: string
+}
+
+/**
+ * Per-member rollup over the last N days, returned by GET /api/team/progress.
+ * Used by the team-progress card on /dashboard. Only owners + managers see
+ * this — RBAC enforced in the service layer.
+ *
+ * `won` is total (not date-windowed) because it's a terminal state we want
+ * to surface for the whole funnel, not just the recent window. The other
+ * counts respect the `days` parameter.
+ *
+ * `user_id === null` represents the Unassigned bucket — leads no team
+ * member owns yet.
+ */
+export interface TeamMemberProgress {
+  user_id: string | null
+  email: string | null
+  role: Role | null
+  leads_owned: number
+  sent: number
+  opened: number
+  replied: number
+  won: number
+}
+
+export interface TeamProgressResponse {
+  rows: TeamMemberProgress[]
+  days: number
 }

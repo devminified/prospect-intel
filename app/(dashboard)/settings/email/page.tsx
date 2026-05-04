@@ -16,14 +16,20 @@ import {
   useUpdateCap,
   useUpdateSignature,
 } from '@/lib/queries/email-account'
+import { useCurrentTeam } from '@/lib/queries/team'
 
 export default function EmailSettingsPage() {
   const accountQ = useEmailAccount()
+  const teamQ = useCurrentTeam()
   const updateSignature = useUpdateSignature()
   const updateCap = useUpdateCap()
   const disconnectMut = useDisconnectEmailAccount()
 
   const account = accountQ.data ?? null
+  // Disconnecting affects every team member because the account is
+  // team-scoped (M70). Restrict to owner + manager.
+  const myRole = teamQ.data?.my_role ?? null
+  const canManage = myRole === 'owner' || myRole === 'manager'
 
   const [cap, setCap] = useState(20)
   const [senderTitle, setSenderTitle] = useState('')
@@ -115,18 +121,25 @@ export default function EmailSettingsPage() {
           <CardContent className="space-y-4">
             <p className="text-sm text-muted-foreground">
               You'll be redirected to Zoho to authorize Prospect Intel to send and read mail on behalf
-              of your account. We request <code className="text-xs">ZohoMail.messages.CREATE</code>,{' '}
+              of the team. We request <code className="text-xs">ZohoMail.messages.CREATE</code>,{' '}
               <code className="text-xs">ZohoMail.messages.READ</code>, and{' '}
-              <code className="text-xs">ZohoMail.accounts.READ</code>.
+              <code className="text-xs">ZohoMail.accounts.READ</code>. Once connected, every team
+              member sees the same account — there's only one outbound mailbox per team.
             </p>
-            <Button
-              disabled={!userId}
-              onClick={() => {
-                if (userId) window.location.href = `/api/auth/zoho/authorize?uid=${userId}`
-              }}
-            >
-              Connect Zoho
-            </Button>
+            {canManage ? (
+              <Button
+                disabled={!userId}
+                onClick={() => {
+                  if (userId) window.location.href = `/api/auth/zoho/authorize?uid=${userId}`
+                }}
+              >
+                Connect Zoho
+              </Button>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Only an owner or manager can connect the team's email account.
+              </p>
+            )}
           </CardContent>
         </Card>
       ) : (
@@ -164,9 +177,15 @@ export default function EmailSettingsPage() {
               </div>
 
               <div className="pt-2 border-t">
-                <Button variant="outline" size="sm" onClick={disconnect} disabled={disconnectMut.isPending}>
-                  Disconnect
-                </Button>
+                {canManage ? (
+                  <Button variant="outline" size="sm" onClick={disconnect} disabled={disconnectMut.isPending}>
+                    Disconnect
+                  </Button>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Only owners and managers can disconnect the team's email account.
+                  </p>
+                )}
               </div>
             </CardContent>
           </Card>

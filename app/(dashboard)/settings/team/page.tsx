@@ -17,7 +17,6 @@ import {
   useRemoveMember,
   useRenameTeam,
   useRevokeInvite,
-  useTransferOwnership,
 } from '@/lib/queries/team'
 import type {
   TeamMemberWithEmail as Member,
@@ -45,7 +44,6 @@ export default function TeamSettingsPage() {
   const revokeMut = useRevokeInvite()
   const roleMut = useChangeMemberRole()
   const removeMut = useRemoveMember()
-  const transferMut = useTransferOwnership()
 
   const data = teamQ.data ?? null
 
@@ -66,7 +64,6 @@ export default function TeamSettingsPage() {
     revokeMut.error?.message ??
     roleMut.error?.message ??
     removeMut.error?.message ??
-    transferMut.error?.message ??
     teamQ.error?.message ??
     ''
 
@@ -104,26 +101,31 @@ export default function TeamSettingsPage() {
     }
   }
 
-  async function transferOwnership(member: Member) {
-    if (
-      !confirm(
-        `Transfer ownership to ${member.email ?? 'this member'}?\n\nYou will be demoted to Manager. Only the new owner can transfer it back.`
-      )
-    )
-      return
-    try {
-      await transferMut.mutateAsync(member.user_id)
-    } catch {
-      // surfaced via transferMut.error
-    }
-  }
-
   async function changeRole(member: Member, newRole: string) {
     try {
       await roleMut.mutateAsync({ userId: member.user_id, role: newRole })
     } catch {
       // surfaced via roleMut.error
     }
+  }
+
+  async function promoteToOwner(member: Member) {
+    if (
+      !confirm(
+        `Promote ${member.email ?? 'this member'} to Owner?\n\nThey'll have full access — manage members, rename the team, disconnect Zoho, etc. Up to 2 owners are allowed.`
+      )
+    )
+      return
+    await changeRole(member, 'owner')
+  }
+
+  async function demoteOwner(member: Member) {
+    const isSelf = member.is_self
+    const msg = isSelf
+      ? 'Step down to Manager? You will lose owner privileges. The other owner can promote you back.'
+      : `Demote ${member.email ?? 'this owner'} to Manager? They will lose owner privileges.`
+    if (!confirm(msg)) return
+    await changeRole(member, 'manager')
   }
 
   async function revoke(inviteId: string) {
@@ -152,6 +154,7 @@ export default function TeamSettingsPage() {
 
   const canInvite = data.my_role === 'owner' || data.my_role === 'manager'
   const isOwner = data.my_role === 'owner'
+  const ownerCount = data.members.filter((m) => m.role === 'owner').length
 
   return (
     <div className="space-y-6">
@@ -205,7 +208,7 @@ export default function TeamSettingsPage() {
         <CardHeader className="flex-row items-baseline justify-between">
           <CardTitle className="text-base">Members</CardTitle>
           <span className="text-xs text-muted-foreground">
-            {data.members.length} {data.members.length === 1 ? 'member' : 'members'}
+            {data.members.length} {data.members.length === 1 ? 'member' : 'members'} · {ownerCount} of 2 owners
           </span>
         </CardHeader>
         <CardContent className="p-0">
@@ -232,26 +235,15 @@ export default function TeamSettingsPage() {
                     {new Date(m.joined_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                   </td>
                   <td className="px-6 py-3 text-right">
-                    {!m.is_self && m.role !== 'owner' && isOwner && (
-                      <div className="inline-flex flex-wrap items-center justify-end gap-1">
-                        <Select value={m.role} onValueChange={(v) => v && changeRole(m, v)}>
-                          <SelectTrigger size="sm" className="min-w-[140px]">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {INVITE_ROLES.map((r) => (
-                              <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Button variant="ghost" size="sm" onClick={() => transferOwnership(m)}>
-                          Make owner
-                        </Button>
-                        <Button variant="ghost" size="sm" onClick={() => removeMember(m)}>
-                          Remove
-                        </Button>
-                      </div>
-                    )}
+                    <MemberRowActions
+                      member={m}
+                      isOwner={isOwner}
+                      ownerCount={ownerCount}
+                      onChangeRole={changeRole}
+                      onPromote={promoteToOwner}
+                      onDemoteOwner={demoteOwner}
+                      onRemove={removeMember}
+                    />
                   </td>
                 </tr>
               ))}
@@ -344,6 +336,79 @@ export default function TeamSettingsPage() {
           </CardContent>
         </Card>
       )}
+    </div>
+  )
+}
+
+function MemberRowActions({
+  member: m,
+  isOwner,
+  ownerCount,
+  onChangeRole,
+  onPromote,
+  onDemoteOwner,
+  onRemove,
+}: {
+  member: Member
+  isOwner: boolean
+  ownerCount: number
+  onChangeRole: (member: Member, role: string) => void
+  onPromote: (member: Member) => void
+  onDemoteOwner: (member: Member) => void
+  onRemove: (member: Member) => void
+}) {
+  // Self-row when you're the only owner — nothing actionable.
+  if (m.is_self && m.role === 'owner' && ownerCount <= 1) return null
+  // Self-row, second owner exists → offer Step down.
+  if (m.is_self && m.role === 'owner' && ownerCount >= 2) {
+    return (
+      <Button variant="ghost" size="sm" onClick={() => onDemoteOwner(m)}>
+        Step down to manager
+      </Button>
+    )
+  }
+  // Anyone non-self / non-owner row only has actions if you're an owner.
+  if (!isOwner) return null
+  if (m.is_self) return null
+
+  // Other-owner row: Demote (only if there are 2 owners) + Remove.
+  if (m.role === 'owner') {
+    return (
+      <div className="inline-flex flex-wrap items-center justify-end gap-1">
+        {ownerCount >= 2 && (
+          <Button variant="ghost" size="sm" onClick={() => onDemoteOwner(m)}>
+            Demote to manager
+          </Button>
+        )}
+        <Button variant="ghost" size="sm" onClick={() => onRemove(m)}>
+          Remove
+        </Button>
+      </div>
+    )
+  }
+
+  // Non-owner row: role select + promote (if room) + remove.
+  const canPromote = ownerCount < 2
+  return (
+    <div className="inline-flex flex-wrap items-center justify-end gap-1">
+      <Select value={m.role} onValueChange={(v) => v && onChangeRole(m, v)}>
+        <SelectTrigger size="sm" className="min-w-[140px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {INVITE_ROLES.map((r) => (
+            <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {canPromote && (
+        <Button variant="ghost" size="sm" onClick={() => onPromote(m)}>
+          Promote to owner
+        </Button>
+      )}
+      <Button variant="ghost" size="sm" onClick={() => onRemove(m)}>
+        Remove
+      </Button>
     </div>
   )
 }

@@ -149,6 +149,12 @@ export async function redeemInvite(
   return { team_id: invite.team_id }
 }
 
+/** Counts how many owners currently exist on a team. */
+async function countOwners(teamId: string): Promise<number> {
+  const members = await dbTeams.listMembers(teamId)
+  return members.filter((m) => m.role === 'owner').length
+}
+
 export async function changeMemberRole(
   userId: string,
   targetUserId: string,
@@ -158,38 +164,81 @@ export async function changeMemberRole(
   if (myRole !== 'owner' && myRole !== 'manager') {
     throw new ForbiddenError('Only owners and managers can change member roles')
   }
-  if (targetUserId === userId) {
-    throw new ValidationError('You cannot change your own role')
-  }
   const parsed = RoleChangeInputSchema.safeParse(raw)
   if (!parsed.success) {
     throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid role', parsed.error.issues)
   }
   const target = await dbTeams.getMembership(teamId, targetUserId)
   if (!target) throw new NotFoundError('Member not found')
-  if (target.role === 'owner') {
-    throw new ValidationError('Use ownership transfer to change the owner role')
+
+  const newRole = parsed.data.role
+  const isSelf = targetUserId === userId
+
+  // Only an existing owner can promote to or demote from 'owner'.
+  if ((newRole === 'owner' || target.role === 'owner') && myRole !== 'owner') {
+    throw new ForbiddenError('Only an owner can promote or demote owners')
   }
-  if (parsed.data.role === 'manager' && myRole !== 'owner') {
-    throw new ForbiddenError('Only the owner can promote members to manager')
+
+  // Self-demotion: allowed when another owner exists. This is the
+  // primary "step down" path now that 2 owners are supported.
+  if (isSelf && target.role === 'owner' && newRole !== 'owner') {
+    const owners = await countOwners(teamId)
+    if (owners <= 1) {
+      throw new ValidationError(
+        'You are the only owner — promote another member to owner before stepping down.'
+      )
+    }
+  } else if (isSelf) {
+    // Other self-changes still blocked (only step-down is meaningful).
+    throw new ValidationError('You cannot change your own role')
   }
-  await dbTeams.setMemberRole(teamId, targetUserId, parsed.data.role)
+
+  // Promotion to owner: respect the ≤2 cap. The DB trigger enforces this
+  // too, but we check here for a friendlier error message.
+  if (newRole === 'owner' && target.role !== 'owner') {
+    const owners = await countOwners(teamId)
+    if (owners >= 2) {
+      throw new ValidationError(
+        'Team already has the maximum of 2 owners. Demote one first.'
+      )
+    }
+  }
+
+  // Demoting an owner that isn't yourself — must keep at least one owner.
+  if (target.role === 'owner' && newRole !== 'owner' && !isSelf) {
+    const owners = await countOwners(teamId)
+    if (owners <= 1) {
+      throw new ValidationError('Cannot demote the only owner.')
+    }
+  }
+
+  // Manager promotion still owner-only (matches prior behavior).
+  if (newRole === 'manager' && target.role !== 'manager' && myRole !== 'owner') {
+    throw new ForbiddenError('Only an owner can promote members to manager')
+  }
+
+  await dbTeams.setMemberRole(teamId, targetUserId, newRole)
 }
 
 export async function removeMember(userId: string, targetUserId: string): Promise<void> {
   const { teamId, role: myRole } = await requireTeamAccess(userId)
   if (myRole !== 'owner') {
-    throw new ForbiddenError('Only the team owner can remove members')
+    throw new ForbiddenError('Only an owner can remove members')
   }
   if (targetUserId === userId) {
     throw new ValidationError(
-      'You cannot remove yourself. Transfer ownership first, then leave from the new owner account.'
+      'You cannot remove yourself. Step down to manager first (if a second owner exists), then ask the other owner to remove you.'
     )
   }
   const target = await dbTeams.getMembership(teamId, targetUserId)
   if (!target) throw new NotFoundError('Member not found')
+
+  // Removing another owner is allowed (2-owner mode), but never the last.
   if (target.role === 'owner') {
-    throw new ValidationError('Cannot remove the owner. Transfer ownership first.')
+    const owners = await countOwners(teamId)
+    if (owners <= 1) {
+      throw new ValidationError('Cannot remove the only owner.')
+    }
   }
 
   await dbTeams.dropMemberEmailAccountsForTeam(teamId, targetUserId)

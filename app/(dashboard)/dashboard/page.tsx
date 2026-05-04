@@ -4,10 +4,15 @@ import { useMemo } from 'react'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useDashboard } from '@/lib/queries/dashboard'
-import type { DashFollowup as Followup } from '@/lib/types'
+import { useCurrentTeam, useTeamProgress } from '@/lib/queries/team'
+import type { DashFollowup as Followup, TeamMemberProgress } from '@/lib/types'
 
 export default function DashboardPage() {
   const { data, isLoading, error } = useDashboard()
+  const teamQ = useCurrentTeam()
+  const myRole = teamQ.data?.my_role ?? null
+  const canSeeTeamProgress = myRole === 'owner' || myRole === 'manager'
+  const progressQ = useTeamProgress(30, { enabled: canSeeTeamProgress })
 
   const prospects = data?.prospects ?? []
   const followups = data?.followups ?? []
@@ -156,6 +161,15 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {canSeeTeamProgress && (
+        <TeamProgressCard
+          rows={progressQ.data?.rows ?? []}
+          loading={progressQ.isLoading}
+          error={progressQ.error?.message}
+          days={progressQ.data?.days ?? 30}
+        />
+      )}
+
       <Card>
         <CardHeader className="flex-row items-baseline justify-between">
           <CardTitle className="text-base">Recent activity</CardTitle>
@@ -187,6 +201,81 @@ export default function DashboardPage() {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+function TeamProgressCard({
+  rows,
+  loading,
+  error,
+  days,
+}: {
+  rows: TeamMemberProgress[]
+  loading: boolean
+  error: string | undefined
+  days: number
+}) {
+  return (
+    <Card>
+      <CardHeader className="flex-row items-baseline justify-between">
+        <CardTitle className="text-base">Team progress</CardTitle>
+        <span className="text-xs text-muted-foreground">last {days} days</span>
+      </CardHeader>
+      <CardContent className="p-0">
+        {loading ? (
+          <p className="px-6 py-4 text-sm text-muted-foreground">Loading…</p>
+        ) : error ? (
+          <p className="px-6 py-4 text-sm text-destructive">{error}</p>
+        ) : rows.length === 0 ? (
+          <p className="px-6 py-4 text-sm text-muted-foreground italic">No team members yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-semibold uppercase text-muted-foreground border-b">
+                  <th className="px-6 py-3">Member</th>
+                  <th className="px-6 py-3">Role</th>
+                  <th className="px-6 py-3 text-right">Leads</th>
+                  <th className="px-6 py-3 text-right">Sent</th>
+                  <th className="px-6 py-3 text-right">Opened</th>
+                  <th className="px-6 py-3 text-right">Replied</th>
+                  <th className="px-6 py-3 text-right">Won</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {rows.map((r) => (
+                  <tr key={r.user_id ?? '__unassigned__'}>
+                    <td className="px-6 py-3">
+                      {r.email ?? <span className="text-muted-foreground italic">Unassigned</span>}
+                    </td>
+                    <td className="px-6 py-3">
+                      {r.role ? (
+                        <span className="inline-flex px-2 py-0.5 text-xs font-semibold rounded-full bg-secondary text-secondary-foreground">
+                          {r.role}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-3 text-right tabular-nums">{r.leads_owned}</td>
+                    <td className="px-6 py-3 text-right tabular-nums">{r.sent}</td>
+                    <td className="px-6 py-3 text-right tabular-nums">{r.opened}</td>
+                    <td className="px-6 py-3 text-right tabular-nums">{r.replied}</td>
+                    <td className="px-6 py-3 text-right tabular-nums">
+                      {r.won > 0 ? (
+                        <span className="text-emerald-700 font-semibold">{r.won}</span>
+                      ) : (
+                        r.won
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 

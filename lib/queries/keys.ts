@@ -23,6 +23,7 @@ export const queryKeys = {
   prospectActivity: (prospectId: string) => ['prospect', prospectId, 'activity'] as const,
   team: {
     current: () => ['team', 'current'] as const,
+    progress: (days: number) => ['team', 'progress', days] as const,
   },
   batches: {
     list: () => ['batches', 'list'] as const,

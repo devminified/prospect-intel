@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiDelete, apiGet, apiPatch, apiPost } from '@/lib/api-client'
-import type { CreateInviteResponse, TeamView } from '@/lib/types'
+import type { CreateInviteResponse, TeamProgressResponse, TeamView } from '@/lib/types'
 import { queryKeys } from './keys'
 
 export function useCurrentTeam() {
@@ -10,6 +10,20 @@ export function useCurrentTeam() {
     queryKey: queryKeys.team.current(),
     queryFn: () => apiGet<TeamView>('/api/team'),
     staleTime: 60_000, // team membership rarely changes; cache aggressively
+  })
+}
+
+/**
+ * Per-member roll-up over the last N days. Server returns 403 for
+ * non-owner / non-manager — caller passes `enabled: false` for those
+ * roles so the request never fires.
+ */
+export function useTeamProgress(days: number, opts: { enabled?: boolean } = {}) {
+  return useQuery<TeamProgressResponse>({
+    queryKey: queryKeys.team.progress(days),
+    queryFn: () => apiGet<TeamProgressResponse>(`/api/team/progress?days=${days}`),
+    enabled: opts.enabled !== false,
+    staleTime: 30_000,
   })
 }
 

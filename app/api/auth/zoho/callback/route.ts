@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
           refresh_token: tokens.refresh_token ?? null,
           token_expires_at: expiresAt,
         },
-        { onConflict: 'user_id,email' }
+        { onConflict: 'team_id,provider' }
       )
 
     if (upsertErr) {

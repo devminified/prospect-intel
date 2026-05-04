@@ -26,7 +26,7 @@ export async function GET() {
     // Extract data like enrichProspect function
     const bodyText = $('body').text().replace(/\s+/g, ' ').trim()
     const hasMobileFriendly = $('meta[name="viewport"]').length > 0
-    const hasContactForm = $('form').filter((i, el) => {
+    const hasContactForm = $('form').filter((_i, el) => {
       const formHtml = $(el).html() || ''
       return formHtml.includes('email') || formHtml.includes('contact') || formHtml.includes('message')
     }).length > 0

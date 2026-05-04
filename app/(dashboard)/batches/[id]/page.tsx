@@ -5,7 +5,6 @@ import Link from 'next/link'
 import { supabase } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { useBatchDetail } from '@/lib/queries/batch-detail'
 import type {
   BatchProspect as Prospect,

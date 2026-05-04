@@ -9,7 +9,6 @@ import {
   TeamRenameInputSchema,
 } from '@/lib/types'
 import type { Role, Team, TeamInvite, TeamMemberWithEmail } from '@/lib/types'
-import { resolveUserTeamId } from '@/lib/team'
 import {
   ConflictError,
   ForbiddenError,
@@ -209,10 +208,3 @@ export async function transferOwnership(userId: string, raw: unknown): Promise<v
   await dbTeams.transferOwnership(teamId, parsed.data.user_id)
 }
 
-/**
- * Helper used by the planner cron to ensure a team exists for a user
- * (auto-provisions one) without going through the role gate.
- */
-export async function ensureTeamForCronUser(userId: string): Promise<string> {
-  return resolveUserTeamId(userId)
-}

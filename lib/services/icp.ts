@@ -2,7 +2,6 @@ import * as dbIcp from '@/lib/db/icp'
 import { IcpPatchInputSchema } from '@/lib/types'
 import type { IcpProfile, Role } from '@/lib/types'
 import { canEditIcp, roleForbiddenMessage } from '@/lib/rbac'
-import { resolveUserTeamId } from '@/lib/team'
 import { requireTeamAccess } from './access'
 import { ForbiddenError, ValidationError } from './errors'
 
@@ -62,9 +61,3 @@ export async function save(userId: string, raw: unknown): Promise<IcpProfile> {
   return dbIcp.upsert(row)
 }
 
-/** Convenience used by the planner cron — bypasses role check. */
-export async function getForCronUser(userId: string): Promise<IcpProfile | null> {
-  const teamId = await resolveUserTeamId(userId)
-  void teamId // resolved for side-effect (auto-provisions team if missing)
-  return dbIcp.getByUserId(userId)
-}

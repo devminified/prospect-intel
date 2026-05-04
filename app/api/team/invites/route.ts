@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest } from 'next/server'
 import { readJsonBody, withAuth } from '@/lib/services/route-helper'
 import * as teamsService from '@/lib/services/teams'
 import { ValidationError } from '@/lib/services/errors'

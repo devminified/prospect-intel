@@ -60,10 +60,6 @@ export function canEditContact(role: Role | null): boolean {
   return !!role && W.editContact.has(role)
 }
 
-export function canManageTeam(role: Role | null): boolean {
-  return !!role && W.ownerOrManager.has(role)
-}
-
 /** Convenience: human-readable forbidden message for the role + action. */
 export function roleForbiddenMessage(role: Role | null, action: string): string {
   if (!role) return `You're not a member of this team.`

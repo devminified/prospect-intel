@@ -30,14 +30,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import type {
-  Note,
-  Followup,
   DetailPainPoint as PainPoint,
-  ProspectContact as Contact,
-  DetailVisibilityAudit as Audit,
-  ChannelRecommendationView as Recommendation,
-  SentEmailDetail as SentEmail,
-  SentEmailLite,
   ProspectActivityEvent as ActivityEvent,
   ProspectDetail as Detail,
 } from '@/lib/types'
@@ -54,7 +47,6 @@ const OUTREACH_STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'not_interested', label: 'Not interested' },
   { value: 'do_not_contact', label: 'Do not contact' },
 ]
-const OUTREACH_LABEL = new Map(OUTREACH_STATUS_OPTIONS.map((o) => [o.value, o.label]))
 
 const PITCH_STATUS_CLS: Record<string, string> = {
   approved: 'bg-green-100 text-green-800 hover:bg-green-100',

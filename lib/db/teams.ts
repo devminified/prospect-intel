@@ -146,16 +146,6 @@ export async function addMember(input: {
   if (error) throw new Error(`db.teams.addMember: ${error.message}`)
 }
 
-export async function createTeam(name: string): Promise<Team> {
-  const { data, error } = await supabaseAdmin
-    .from('teams')
-    .insert({ name })
-    .select('id, name, created_at')
-    .single()
-  if (error || !data) throw new Error(`db.teams.createTeam: ${error?.message ?? 'no row returned'}`)
-  return data as Team
-}
-
 /**
  * Deletes the email_accounts a removed member had connected for THIS
  * team — only that user holds the Zoho tokens; the row would be
@@ -177,19 +167,3 @@ export async function dropMemberEmailAccountsForTeam(
   }
 }
 
-/**
- * Resolves the membership row to use as the user's "current" team.
- * Owner rows preferred; otherwise earliest joined_at.
- */
-export async function findMyMembership(userId: string): Promise<TeamMember | null> {
-  const { data, error } = await supabaseAdmin
-    .from('team_members')
-    .select('team_id, user_id, role, joined_at')
-    .eq('user_id', userId)
-    .order('role', { ascending: false })
-    .order('joined_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
-  if (error) throw new Error(`db.teams.findMyMembership: ${error.message}`)
-  return (data as TeamMember | null) ?? null
-}

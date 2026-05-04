@@ -5,9 +5,6 @@ import { apiGet, apiPatch } from '@/lib/api-client'
 import type { IcpFormState, IcpResponse } from '@/lib/types'
 import { queryKeys } from './keys'
 
-/**
- * GET /api/icp — returns the team's ICP profile (or null if unset).
- */
 export function useIcp() {
   return useQuery<IcpResponse>({
     queryKey: queryKeys.icp.current(),
@@ -15,10 +12,7 @@ export function useIcp() {
   })
 }
 
-/**
- * PATCH /api/icp — saves the form state. Server validates with
- * IcpPatchInputSchema before writing.
- */
+/** Server validates with IcpPatchInputSchema before writing. */
 export function useSaveIcp() {
   const qc = useQueryClient()
   return useMutation<unknown, Error, IcpFormState>({

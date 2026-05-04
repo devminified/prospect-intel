@@ -76,10 +76,7 @@ export function usePlanDetail(planId: string) {
   })
 }
 
-/**
- * POST /api/plans/[id]/execute — kicks every plan-item that hasn't
- * been turned into a batch yet. Pass an `item_id` to execute one row.
- */
+/** Pass `itemId` to execute one row, omit to execute every unbatched item. */
 export function useExecutePlan(planId: string) {
   const qc = useQueryClient()
   return useMutation<ExecutePlanResponse, Error, { itemId?: string }>({

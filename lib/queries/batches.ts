@@ -6,10 +6,7 @@ import { apiPost } from '@/lib/api-client'
 import type { BatchListRow, CreateBatchClientInput, CreateBatchResponse } from '@/lib/types'
 import { queryKeys } from './keys'
 
-/**
- * List of batches the current team has created (RLS-filtered). Drives
- * the /batches page table.
- */
+/** RLS-filtered to the current team. */
 export function useBatches() {
   return useQuery<BatchListRow[]>({
     queryKey: queryKeys.batches.list(),
@@ -25,8 +22,9 @@ export function useBatches() {
 }
 
 /**
- * POST /api/batches — kicks off Places search + first-stage enqueue.
- * On success, invalidates the batches list so the new row appears.
+ * Server-side this kicks off the Places search + enqueues the first
+ * pipeline stage; from the page's perspective just invalidate the list
+ * so the new row appears.
  */
 export function useCreateBatch() {
   const qc = useQueryClient()

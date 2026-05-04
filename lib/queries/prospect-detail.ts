@@ -162,9 +162,8 @@ export function useRecommendChannel(prospectId: string) {
 }
 
 /**
- * POST /api/pitches/[pitchId]/send. Pitch id varies per prospect; pass it
- * in at call time. Invalidates the prospect aggregate so the sentEmail
- * strip refreshes.
+ * Pitch id varies per prospect; pass it in at call time. Invalidates the
+ * prospect aggregate so the sentEmail strip refreshes.
  */
 export function useSendPitch(prospectId: string) {
   const qc = useQueryClient()

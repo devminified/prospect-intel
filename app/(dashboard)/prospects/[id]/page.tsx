@@ -253,8 +253,6 @@ export default function ProspectDetailPage({ params }: { params: Promise<{ id: s
   }
 
   const loading = detailQ.isLoading
-  // Aggregate "anything in flight" disabling for the pitch action row,
-  // so callers don't have to enumerate every mutation.
   const saving = patchMut.isPending
   const regenerating = regenMut.isPending
   const recommending = recommendMut.isPending

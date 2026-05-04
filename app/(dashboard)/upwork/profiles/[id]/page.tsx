@@ -162,6 +162,32 @@ export default function UpworkProfileDetailPage({
         </div>
       )}
 
+      <div className="flex flex-wrap gap-3">
+        <Link
+          href={`/upwork/profiles/${profile.id}/proposals`}
+          className="rounded-md border bg-background px-4 py-3 text-sm hover:bg-muted/50 transition-colors flex-1 min-w-[200px]"
+        >
+          <div className="font-medium">Proposals →</div>
+          <p className="text-xs text-muted-foreground mt-0.5">Bids sent from this profile + status</p>
+        </Link>
+        <Link
+          href={`/upwork/profiles/${profile.id}/connects`}
+          className="rounded-md border bg-background px-4 py-3 text-sm hover:bg-muted/50 transition-colors flex-1 min-w-[200px]"
+        >
+          <div className="font-medium">Connects ledger →</div>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {profile.connects_balance} Connects · purchases, spends, refunds
+          </p>
+        </Link>
+        <Link
+          href="/upwork/jobs"
+          className="rounded-md border bg-background px-4 py-3 text-sm hover:bg-muted/50 transition-colors flex-1 min-w-[200px]"
+        >
+          <div className="font-medium">Find a job →</div>
+          <p className="text-xs text-muted-foreground mt-0.5">Browse team-saved jobs and bid</p>
+        </Link>
+      </div>
+
       <Card>
         <CardHeader className="flex-row items-baseline justify-between">
           <CardTitle className="text-base">Members</CardTitle>

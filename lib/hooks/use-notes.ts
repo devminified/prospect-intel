@@ -1,53 +1,51 @@
 'use client'
 
 import { useState } from 'react'
-import { authHeaders } from '@/lib/auth-headers'
+import { useAddNote, useEditNote, useDeleteNote } from '@/lib/queries/notes'
+import type { Note } from '@/lib/types'
 
-export interface Note {
-  id: string
-  body: string
-  created_at: string
-  updated_at: string | null
-  user_id: string
-}
+export type { Note }
 
 /**
- * Owns local state for the Notes card on a prospect detail page:
- * the new-note input, inline-edit state, and per-action pending flags.
+ * Owns local form state (newBody, editing) and exposes the same public
+ * API the prospect detail page consumes today. Internally delegates to
+ * TanStack mutations from lib/queries/notes so:
+ *   - request/parse/error logic is centralized in lib/api-client.ts
+ *   - cache invalidation runs (queryKeys.notes / queryKeys.prospectActivity)
  *
- * Network calls go to /api/prospects/:id/notes; on success we call
- * onChange() so the parent page can re-fetch the notes list and any
- * derived activity feed.
+ * `onChange` is kept for backward-compat — the page still uses load() to
+ * fetch notes for the activity feed; the callback triggers that refresh.
+ * Once the page swaps to useNotes (TanStack query) directly, onChange
+ * becomes redundant — see Phase 9 carry-forward notes.
  */
 export function useNotes(prospectId: string, onChange: () => void) {
   const [newBody, setNewBody] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingBody, setEditingBody] = useState('')
-  const [pending, setPending] = useState<'add' | 'save' | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const addMutation = useAddNote(prospectId)
+  const editMutation = useEditNote(prospectId)
+  const deleteMutation = useDeleteNote(prospectId)
+
+  // Compose pending state from the underlying TanStack mutations so the
+  // page's button-disable logic keeps working.
+  const pending: 'add' | 'save' | null = addMutation.isPending
+    ? 'add'
+    : editMutation.isPending
+    ? 'save'
+    : null
 
   async function add() {
     const text = newBody.trim()
     if (!text) return
-    setPending('add')
     setError(null)
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${prospectId}/notes`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ body: text }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'add note failed' }))
-        throw new Error(err.error ?? 'add note failed')
-      }
+      await addMutation.mutateAsync(text)
       setNewBody('')
       onChange()
     } catch (e: any) {
       setError(e.message)
-    } finally {
-      setPending(null)
     }
   }
 
@@ -65,26 +63,14 @@ export function useNotes(prospectId: string, onChange: () => void) {
     if (!editingId) return
     const text = editingBody.trim()
     if (!text) return
-    setPending('save')
     setError(null)
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${prospectId}/notes/${editingId}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ body: text }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'save note failed' }))
-        throw new Error(err.error ?? 'save note failed')
-      }
+      await editMutation.mutateAsync({ noteId: editingId, body: text })
       setEditingId(null)
       setEditingBody('')
       onChange()
     } catch (e: any) {
       setError(e.message)
-    } finally {
-      setPending(null)
     }
   }
 
@@ -92,15 +78,7 @@ export function useNotes(prospectId: string, onChange: () => void) {
     if (typeof window !== 'undefined' && !window.confirm('Delete this note? This cannot be undone.')) return
     setError(null)
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${prospectId}/notes/${id}`, {
-        method: 'DELETE',
-        headers,
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'delete note failed' }))
-        throw new Error(err.error ?? 'delete note failed')
-      }
+      await deleteMutation.mutateAsync(id)
       onChange()
     } catch (e: any) {
       setError(e.message)

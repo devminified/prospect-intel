@@ -1,17 +1,15 @@
 'use client'
 
 import { useState } from 'react'
-import { authHeaders } from '@/lib/auth-headers'
+import {
+  useAddFollowup,
+  useToggleFollowupDone,
+  useDeleteFollowup,
+} from '@/lib/queries/followups'
 import { buildIcsEvent, downloadIcs } from '@/lib/ics'
+import type { Followup } from '@/lib/types'
 
-export interface Followup {
-  id: string
-  due_at: string
-  note: string | null
-  done: boolean
-  done_at: string | null
-  created_at: string
-}
+export type { Followup }
 
 interface ProspectContext {
   id: string
@@ -20,25 +18,35 @@ interface ProspectContext {
 }
 
 /**
- * Owns local state for the Follow-ups card on a prospect detail page:
- * the new-followup form (datetime + note), per-row pending toggle, and
- * the ICS download trigger.
+ * Owns local form state for the Follow-ups card. Internally delegates to
+ * TanStack mutations from lib/queries/followups so:
+ *   - request/parse/error logic is centralized in lib/api-client.ts
+ *   - cache invalidation runs (queryKeys.followups / queryKeys.prospectActivity)
+ *   - toggle-done's optimistic flip + rollback come from useToggleFollowupDone
  *
- * Toggle done is OPTIMISTIC — it flips the local list immediately so
- * the checkbox feels snappy, then reverts on PATCH failure. The optimistic
- * state lives on the parent's followup list, so the hook accepts an
- * `applyOptimistic` callback for the parent to mutate its own state.
+ * The legacy `applyOptimistic` callback is no longer needed (TanStack
+ * handles cache rollback) but remains accepted for backward-compat with
+ * the prospect detail page until M64. ICS download stays here since it's
+ * a pure client-side transform, not a network call.
  */
 export function useFollowups(
   prospect: ProspectContext,
   onChange: () => void,
-  applyOptimistic?: (mutator: (list: Followup[]) => Followup[]) => void
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _applyOptimistic?: (mutator: (list: Followup[]) => Followup[]) => void
 ) {
   const [newAt, setNewAt] = useState('')
   const [newNote, setNewNote] = useState('')
-  const [pending, setPending] = useState<'add' | null>(null)
-  const [pendingId, setPendingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const addMutation = useAddFollowup(prospect.id)
+  const toggleMutation = useToggleFollowupDone(prospect.id)
+  const deleteMutation = useDeleteFollowup(prospect.id)
+
+  const pending: 'add' | null = addMutation.isPending ? 'add' : null
+  const pendingId: string | null = toggleMutation.isPending
+    ? (toggleMutation.variables?.id ?? null)
+    : null
 
   async function add() {
     if (!newAt) {
@@ -50,59 +58,27 @@ export function useFollowups(
       setError('Invalid date')
       return
     }
-    setPending('add')
     setError(null)
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${prospect.id}/followups`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ due_at: dueAt.toISOString(), note: newNote.trim() || null }),
+      await addMutation.mutateAsync({
+        due_at: dueAt.toISOString(),
+        note: newNote.trim() || null,
       })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'add follow-up failed' }))
-        throw new Error(err.error ?? 'add follow-up failed')
-      }
       setNewAt('')
       setNewNote('')
       onChange()
     } catch (e: any) {
       setError(e.message)
-    } finally {
-      setPending(null)
     }
   }
 
   async function toggleDone(f: Followup) {
-    if (applyOptimistic) {
-      applyOptimistic((list) =>
-        list.map((x) =>
-          x.id === f.id ? { ...x, done: !f.done, done_at: !f.done ? new Date().toISOString() : null } : x
-        )
-      )
-    }
-    setPendingId(f.id)
     setError(null)
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${prospect.id}/followups/${f.id}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ done: !f.done }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'toggle failed' }))
-        throw new Error(err.error ?? 'toggle failed')
-      }
+      await toggleMutation.mutateAsync({ id: f.id, done: !f.done })
       onChange()
     } catch (e: any) {
-      // Revert optimistic update.
-      if (applyOptimistic) {
-        applyOptimistic((list) => list.map((x) => (x.id === f.id ? f : x)))
-      }
       setError(e.message)
-    } finally {
-      setPendingId(null)
     }
   }
 
@@ -110,15 +86,7 @@ export function useFollowups(
     if (typeof window !== 'undefined' && !window.confirm('Delete this follow-up? This cannot be undone.')) return
     setError(null)
     try {
-      const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-      const res = await fetch(`/api/prospects/${prospect.id}/followups/${fid}`, {
-        method: 'DELETE',
-        headers,
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'delete failed' }))
-        throw new Error(err.error ?? 'delete failed')
-      }
+      await deleteMutation.mutateAsync(fid)
       onChange()
     } catch (e: any) {
       setError(e.message)

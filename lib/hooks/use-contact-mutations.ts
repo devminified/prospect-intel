@@ -1,7 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { authHeaders } from '@/lib/auth-headers'
+import {
+  usePatchContact,
+  useUseBusinessPhone,
+  useFindDirectLine,
+} from '@/lib/queries/contacts'
 
 /**
  * Owns local pending state for per-contact mutations on a prospect's
@@ -11,11 +15,23 @@ import { authHeaders } from '@/lib/auth-headers'
  * One pendingId at a time — the UI disables all action buttons on a
  * contact row while any of its mutations are in flight, since chaining
  * them risks racing PATCH responses against each other.
+ *
+ * Internally delegates to TanStack mutations from lib/queries/contacts so:
+ *   - request/parse/error logic is centralized in lib/api-client.ts
+ *   - cache invalidation runs (queryKeys.prospect)
+ *
+ * `onChange` is kept for backward-compat — page still uses load() to
+ * refresh the contacts list. Once page swaps to useProspectDetail
+ * directly, the callback becomes redundant.
  */
 export function useContactMutations(prospectId: string, onChange: () => void) {
   const [pendingId, setPendingId] = useState<string | null>(null)
   const [pendingKind, setPendingKind] = useState<'phone' | 'linkedin' | 'name' | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const patchMutation = usePatchContact(prospectId)
+  const useBusinessMutation = useUseBusinessPhone(prospectId)
+  const findDirectMutation = useFindDirectLine(prospectId)
 
   async function withPending<T>(
     contactId: string,
@@ -36,31 +52,6 @@ export function useContactMutations(prospectId: string, onChange: () => void) {
     }
   }
 
-  async function patchContact(contactId: string, body: Record<string, unknown>) {
-    const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-    const res = await fetch(`/api/prospects/${prospectId}/contacts/${contactId}`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify(body),
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'request failed' }))
-      throw new Error(err.error ?? 'request failed')
-    }
-  }
-
-  async function postContactAction(contactId: string, action: string) {
-    const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) }
-    const res = await fetch(`/api/prospects/${prospectId}/contacts/${contactId}/${action}`, {
-      method: 'POST',
-      headers,
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: `${action} failed` }))
-      throw new Error(err.error ?? `${action} failed`)
-    }
-  }
-
   async function setPhoneManually(contactId: string, currentPhone: string | null) {
     if (typeof window === 'undefined') return
     const input = window.prompt(
@@ -72,14 +63,17 @@ export function useContactMutations(prospectId: string, onChange: () => void) {
     if (input === null) return
     const trimmed = input.trim()
     await withPending(contactId, 'phone', async () => {
-      await patchContact(contactId, { phone: trimmed === '' ? null : trimmed })
+      await patchMutation.mutateAsync({
+        contactId,
+        patch: { phone: trimmed === '' ? null : trimmed },
+      })
       onChange()
     })
   }
 
   async function useBusinessPhone(contactId: string) {
     await withPending(contactId, 'phone', async () => {
-      await postContactAction(contactId, 'use-business-phone')
+      await useBusinessMutation.mutateAsync(contactId)
       onChange()
     })
   }
@@ -94,7 +88,7 @@ export function useContactMutations(prospectId: string, onChange: () => void) {
       return
     }
     await withPending(contactId, 'phone', async () => {
-      await postContactAction(contactId, 'find-direct-line')
+      await findDirectMutation.mutateAsync(contactId)
       onChange()
     })
   }
@@ -110,7 +104,10 @@ export function useContactMutations(prospectId: string, onChange: () => void) {
     if (input === null) return
     const trimmed = input.trim()
     await withPending(contactId, 'linkedin', async () => {
-      await patchContact(contactId, { linkedin_url: trimmed === '' ? null : trimmed })
+      await patchMutation.mutateAsync({
+        contactId,
+        patch: { linkedin_url: trimmed === '' ? null : trimmed },
+      })
       onChange()
     })
   }
@@ -135,10 +132,13 @@ export function useContactMutations(prospectId: string, onChange: () => void) {
       if (!proceed) return
     }
     await withPending(contactId, 'name', async () => {
-      await patchContact(contactId, {
-        first_name: firstName,
-        last_name: lastName,
-        full_name: trimmed,
+      await patchMutation.mutateAsync({
+        contactId,
+        patch: {
+          first_name: firstName,
+          last_name: lastName,
+          full_name: trimmed,
+        },
       })
       onChange()
     })

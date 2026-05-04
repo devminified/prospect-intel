@@ -2,7 +2,6 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { supabase } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -71,10 +70,9 @@ export default function LoginPage() {
               {loading ? 'Signing in…' : 'Sign in'}
             </Button>
 
-            <p className="text-center text-sm">
-              <Link href="/signup" className="text-primary hover:underline">
-                Don&apos;t have an account? Sign up
-              </Link>
+            <p className="text-center text-xs text-muted-foreground">
+              Prospect Intel is invite-only. If you've been invited, open
+              the link in your email to set a password.
             </p>
           </form>
         </CardContent>

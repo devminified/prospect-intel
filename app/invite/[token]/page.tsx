@@ -67,11 +67,23 @@ export default function InviteRedeemPage({ params }: { params: Promise<{ token: 
           {status === 'need_signin' && (
             <>
               <p className="text-sm">
-                Sign in to the email address this invite was sent to, then come back to this page.
+                You haven't created an account yet. Click below to set a
+                password — we'll lock the email to the address this invite was
+                sent to.
               </p>
-              <Button onClick={() => router.push(`/login?next=/invite/${token}`)} className="w-full">
-                Sign in
+              <Button onClick={() => router.push(`/signup?token=${token}`)} className="w-full">
+                Set password & accept invite
               </Button>
+              <p className="text-xs text-muted-foreground text-center">
+                Already have an account?{' '}
+                <button
+                  onClick={() => router.push(`/login?next=/invite/${token}`)}
+                  className="underline"
+                >
+                  Sign in
+                </button>
+                .
+              </p>
             </>
           )}
 

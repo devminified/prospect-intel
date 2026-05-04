@@ -29,8 +29,28 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       const { data: { user } } = await supabase.auth.getUser()
       setUser(user)
       setLoading(false)
-      if (!user) router.push('/login')
-      else void registerSelfIp()
+      if (!user) {
+        router.push('/login')
+        return
+      }
+      // Authenticated but no team membership → orphan account.
+      // Bounce to /no-team rather than letting them hit dashboard
+      // routes that will all 403. /api/team is the canonical probe —
+      // it throws ForbiddenError when there's no team.
+      void (async () => {
+        try {
+          const { data: sessionData } = await supabase.auth.getSession()
+          const token = sessionData.session?.access_token
+          if (!token) return
+          const res = await fetch('/api/team', {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          if (res.status === 403) router.push('/no-team')
+        } catch {
+          // best-effort — transient probe failure shouldn't yank the user.
+        }
+      })()
+      void registerSelfIp()
     }
 
     // Capture this session's IP so the open-tracking pixel can flag opens

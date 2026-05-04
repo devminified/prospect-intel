@@ -1,21 +1,19 @@
 import { supabaseAdmin } from './supabase/server'
 
 /**
- * Resolves the active team_id for a given user.
+ * Sentinel returned when a user has no team membership. Callers in the
+ * service layer translate this into a `ForbiddenError`; cron callers
+ * skip the user; the auth layout redirects to /no-team.
  *
- * For the M45 single-team-per-user world this returns the one team the
- * user belongs to. If they belong to multiple, the owner team is
- * preferred; otherwise the first by joined_at.
- *
- * If the user has no team yet — typical for a brand-new auth signup
- * before the M47 invite flow has provisioned them — we auto-create a
- * personal "My Team" and make them the owner. This keeps the app
- * usable for fresh sign-ins and is harmless: solo users can rename
- * their team in the M46 settings UI, and invited users will instead
- * land via the invite redemption path that adds them to an existing
- * team before any insert runs.
+ * The app does NOT auto-provision teams. The only paths into a team are
+ * (1) being the bootstrapped owner of the Devminified team, or (2)
+ * redeeming an invite via /invite/[token]. Self-signup at /signup is
+ * gated behind a valid invite token; without a token the form rejects.
  */
-export async function resolveUserTeamId(userId: string): Promise<string> {
+export const NO_TEAM = Symbol('NO_TEAM')
+export type ResolvedTeam = string | typeof NO_TEAM
+
+export async function resolveUserTeamId(userId: string): Promise<ResolvedTeam> {
   const { data, error } = await supabaseAdmin
     .from('team_members')
     .select('team_id, role, joined_at')
@@ -28,25 +26,5 @@ export async function resolveUserTeamId(userId: string): Promise<string> {
   if (error) {
     throw new Error(`team lookup failed: ${error.message}`)
   }
-  if (data?.team_id) return data.team_id
-
-  return await createPersonalTeam(userId)
-}
-
-async function createPersonalTeam(userId: string): Promise<string> {
-  const { data: team, error: teamErr } = await supabaseAdmin
-    .from('teams')
-    .insert({ name: 'My Team' })
-    .select('id')
-    .single()
-  if (teamErr || !team) {
-    throw new Error(`create team failed: ${teamErr?.message ?? 'unknown'}`)
-  }
-  const { error: memberErr } = await supabaseAdmin
-    .from('team_members')
-    .insert({ team_id: team.id, user_id: userId, role: 'owner' })
-  if (memberErr) {
-    throw new Error(`team member insert failed: ${memberErr.message}`)
-  }
-  return team.id
+  return data?.team_id ?? NO_TEAM
 }

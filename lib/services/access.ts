@@ -1,6 +1,6 @@
 import * as dbProspects from '@/lib/db/prospects'
 import * as dbTeams from '@/lib/db/teams'
-import { resolveUserTeamId } from '@/lib/team'
+import { NO_TEAM, resolveUserTeamId } from '@/lib/team'
 import type { Role } from '@/lib/types'
 import { ForbiddenError, NotFoundError } from './errors'
 
@@ -31,6 +31,7 @@ export async function requireTeamAccess(
   userId: string
 ): Promise<{ teamId: string; role: Role }> {
   const teamId = await resolveUserTeamId(userId)
+  if (teamId === NO_TEAM) throw new ForbiddenError('Not a team member')
   const membership = await dbTeams.getMembership(teamId, userId)
   if (!membership) throw new ForbiddenError('Not a team member')
   return { teamId, role: membership.role }

@@ -8,24 +8,33 @@ import type { User } from '@supabase/supabase-js'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useCurrentTeam } from '@/lib/queries/team'
+import { useUpworkAccess } from '@/lib/queries/upwork-profiles'
 
 /**
- * Nav links + the role gate for each. `roles` is the allow-list —
- * undefined means "everyone on the team sees it". Mirrors the matrix
- * in lib/rbac.ts:
- *   - Plans / Batches / ICP belong to the `createWork` set: owners,
- *     managers, and lead-gens (the people who configure the funnel).
- *     Closers and cold-callers don't see these — they live in /leads.
- *   - Email is owner-only: it's the team's outbound mailbox, the rest
- *     of the team can see it's connected via /dashboard but can't
- *     touch the connection itself.
- *   - Dashboard / Leads / Team are visible to every role; the
- *     pages themselves gate write actions.
+ * Nav links + the role gate for each. Mirrors the role matrix in
+ * lib/rbac.ts and the per-module isolation rule (outbound vs Upwork):
+ *
+ *   Outbound module (existing):
+ *     - Dashboard / Leads / Team open to outbound roles (every team
+ *       role except `bidder` — bidders are Upwork-only).
+ *     - Plans / Batches / ICP are the `createWork` set: owner,
+ *       manager, lead_gen.
+ *     - Email is owner-only — single team mailbox.
+ *
+ *   Upwork module (Phase 11A+):
+ *     - Visible only when `useUpworkAccess()` reports has_access.
+ *       Owner always passes; everyone else needs an explicit
+ *       upwork_profile_members row. The team-wide `manager` role does
+ *       NOT confer Upwork access — outbound manager ≠ Upwork manager.
+ *
+ * `roles` undefined = visible to anyone with team membership; the page
+ * itself still gates write actions.
  */
+const OUTBOUND_BASE_ROLES = ['owner', 'manager', 'lead_gen', 'cold_caller', 'closer']
 const CREATE_WORK_ROLES = ['owner', 'manager', 'lead_gen']
-const NAV: Array<{ href: string; label: string; roles?: string[] }> = [
-  { href: '/dashboard', label: 'Dashboard' },
-  { href: '/leads', label: 'Leads' },
+const OUTBOUND_NAV: Array<{ href: string; label: string; roles?: string[] }> = [
+  { href: '/dashboard', label: 'Dashboard', roles: OUTBOUND_BASE_ROLES },
+  { href: '/leads', label: 'Leads', roles: OUTBOUND_BASE_ROLES },
   { href: '/plans', label: 'Plans', roles: CREATE_WORK_ROLES },
   { href: '/batches', label: 'Batches', roles: CREATE_WORK_ROLES },
   { href: '/settings/icp', label: 'ICP', roles: CREATE_WORK_ROLES },
@@ -39,10 +48,27 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const router = useRouter()
   const pathname = usePathname()
   const teamQ = useCurrentTeam()
+  const upworkAccessQ = useUpworkAccess()
   const myRole = teamQ.data?.my_role ?? null
-  // While the role is unknown, hide role-gated nav items rather than
-  // flashing them and then yanking them away.
-  const visibleNav = NAV.filter((n) => !n.roles || (myRole && n.roles.includes(myRole)))
+  const upworkAccess = upworkAccessQ.data
+  // While role is unknown, hide role-gated items rather than flashing
+  // them and yanking them away.
+  const visibleOutboundNav = OUTBOUND_NAV.filter(
+    (n) => !n.roles || (myRole && n.roles.includes(myRole))
+  )
+  const showUpworkTab = !!upworkAccess?.has_access
+
+  // Pure-bidder redirect: if the user has only Upwork access (team role
+  // 'bidder' with profile membership) and they land on an outbound-only
+  // route, bounce them to /upwork. Owners and outbound roles aren't
+  // touched.
+  useEffect(() => {
+    if (!upworkAccess) return
+    if (!upworkAccess.is_pure_upwork) return
+    if (pathname.startsWith('/upwork')) return
+    if (pathname.startsWith('/no-team')) return
+    router.replace('/upwork')
+  }, [upworkAccess, pathname, router])
 
   useEffect(() => {
     const getUser = async () => {
@@ -126,7 +152,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <div className="flex items-center gap-6">
               <h1 className="text-xl font-semibold">Prospect Intel</h1>
               <nav className="hidden md:flex gap-1 text-sm">
-                {visibleNav.map((n) => {
+                {visibleOutboundNav.map((n) => {
                   const active = pathname === n.href || pathname.startsWith(`${n.href}/`)
                   return (
                     <Link
@@ -143,6 +169,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     </Link>
                   )
                 })}
+                {showUpworkTab && (
+                  <>
+                    {visibleOutboundNav.length > 0 && (
+                      <span className="mx-2 self-center h-5 w-px bg-border" aria-hidden />
+                    )}
+                    <Link
+                      href="/upwork"
+                      className={cn(
+                        'px-3 py-1.5 rounded-md transition-colors',
+                        pathname.startsWith('/upwork')
+                          ? 'bg-secondary text-secondary-foreground'
+                          : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                      )}
+                    >
+                      Upwork
+                    </Link>
+                  </>
+                )}
               </nav>
             </div>
             <div className="flex items-center gap-3">

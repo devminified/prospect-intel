@@ -1,6 +1,6 @@
 import { supabaseAdmin } from './supabase/server'
 
-export type Role = 'owner' | 'manager' | 'lead_gen' | 'cold_caller' | 'closer'
+export type Role = 'owner' | 'manager' | 'lead_gen' | 'cold_caller' | 'closer' | 'bidder'
 
 /**
  * Returns the role the user holds on the given team, or null if not a

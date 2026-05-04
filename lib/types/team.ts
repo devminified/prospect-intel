@@ -1,6 +1,13 @@
 import { z } from 'zod'
 
-export const RoleSchema = z.enum(['owner', 'manager', 'lead_gen', 'cold_caller', 'closer'])
+export const RoleSchema = z.enum([
+  'owner',
+  'manager',
+  'lead_gen',
+  'cold_caller',
+  'closer',
+  'bidder',
+])
 export type Role = z.infer<typeof RoleSchema>
 
 /**

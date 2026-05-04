@@ -39,4 +39,10 @@ export const queryKeys = {
   emailAccount: {
     current: () => ['emailAccount', 'current'] as const,
   },
+  upwork: {
+    access: () => ['upwork', 'access'] as const,
+    profiles: () => ['upwork', 'profiles'] as const,
+    profile: (id: string) => ['upwork', 'profile', id] as const,
+    addableMembers: (profileId: string) => ['upwork', 'profile', profileId, 'addable'] as const,
+  },
 } as const

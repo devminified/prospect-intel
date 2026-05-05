@@ -84,19 +84,19 @@ export const TeamRenameInputSchema = z.object({
 export type TeamRenameInput = z.infer<typeof TeamRenameInputSchema>
 
 /**
- * Invite presets (M88/M89). The UI picks one of these instead of a raw
- * role; the service layer derives both the team-wide role and the
+ * Invite presets (M88/M89/M91). The UI picks one of these instead of a
+ * raw role; the service layer derives both the team-wide role and the
  * Upwork profile assignments from the preset.
  *
- * | Preset             | team_role  | Upwork assignments                                      |
- * | ------------------ | ---------- | ------------------------------------------------------- |
- * | outbound_manager   | manager    | none                                                    |
- * | outbound_lead_gen  | lead_gen   | none                                                    |
- * | outbound_cold_caller | cold_caller | none                                                  |
- * | outbound_closer    | closer     | none                                                    |
- * | upwork_bidder      | bidder     | bidder on the picked profile                            |
- * | upwork_manager     | bidder     | manager on the picked profile (must have no manager)    |
- * | combined_manager   | manager    | manager on every active profile that has no manager yet |
+ * | Preset             | team_role  | Upwork assignments                                       |
+ * | ------------------ | ---------- | -------------------------------------------------------- |
+ * | outbound_manager   | manager    | none                                                     |
+ * | outbound_lead_gen  | lead_gen   | none                                                     |
+ * | outbound_cold_caller | cold_caller | none                                                   |
+ * | outbound_closer    | closer     | none                                                     |
+ * | upwork_bidder      | bidder     | bidder on each picked profile (1..N)                     |
+ * | upwork_manager     | bidder     | manager on each picked profile (each must have no manager) |
+ * | combined_manager   | manager    | manager on every active profile that has no manager yet  |
  */
 export const InvitePresetSchema = z.enum([
   'outbound_manager',
@@ -117,16 +117,28 @@ export const InviteCreateInputSchema = z
       .toLowerCase()
       .regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Valid email required'),
     preset: InvitePresetSchema,
-    /** Required for `upwork_bidder` and `upwork_manager` presets only. */
-    profile_id: z.string().uuid().optional(),
+    /**
+     * Required for `upwork_bidder` and `upwork_manager` presets only.
+     * Multi-select — the invitee gets the role on every profile_id in
+     * the array. Snapshot at create time; later-added profiles are NOT
+     * auto-included.
+     */
+    profile_ids: z.array(z.string().uuid()).optional(),
   })
-  .superRefine((val: { preset: InvitePreset; profile_id?: string }, ctx: z.RefinementCtx) => {
+  .superRefine((val: { preset: InvitePreset; profile_ids?: string[] }, ctx: z.RefinementCtx) => {
     const needsProfile = val.preset === 'upwork_bidder' || val.preset === 'upwork_manager'
-    if (needsProfile && !val.profile_id) {
+    if (needsProfile && (!val.profile_ids || val.profile_ids.length === 0)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['profile_id'],
-        message: 'Pick an Upwork profile for this invite',
+        path: ['profile_ids'],
+        message: 'Pick at least one Upwork profile for this invite',
+      })
+    }
+    if (val.profile_ids && new Set(val.profile_ids).size !== val.profile_ids.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['profile_ids'],
+        message: 'Duplicate profile in selection',
       })
     }
   })

@@ -103,26 +103,30 @@ function presetToTeamRole(preset: InvitePreset): InvitableRole {
 async function resolveUpworkAssignments(
   teamId: string,
   preset: InvitePreset,
-  profileId: string | undefined
+  profileIds: string[] | undefined
 ): Promise<UpworkAssignment[]> {
   if (preset === 'upwork_bidder' || preset === 'upwork_manager') {
-    if (!profileId) {
-      throw new ValidationError('Pick an Upwork profile for this invite')
+    if (!profileIds || profileIds.length === 0) {
+      throw new ValidationError('Pick at least one Upwork profile for this invite')
     }
-    const profile = await dbProfiles.getById(profileId)
-    if (!profile || profile.team_id !== teamId) {
-      throw new NotFoundError('Upwork profile not found in this team')
-    }
-    if (preset === 'upwork_manager') {
-      const existingMembers = await dbProfiles.listMembers(profileId)
-      const existingManager = existingMembers.find((m) => m.role === 'manager')
-      if (existingManager) {
-        throw new ConflictError(
-          'This profile already has a manager. Demote them first or pick another profile.'
-        )
+    const role: 'manager' | 'bidder' = preset === 'upwork_manager' ? 'manager' : 'bidder'
+    const out: UpworkAssignment[] = []
+    for (const pid of profileIds) {
+      const profile = await dbProfiles.getById(pid)
+      if (!profile || profile.team_id !== teamId) {
+        throw new NotFoundError('Upwork profile not found in this team')
       }
+      if (role === 'manager') {
+        const existingMembers = await dbProfiles.listMembers(pid)
+        if (existingMembers.some((m) => m.role === 'manager')) {
+          throw new ConflictError(
+            `Profile "${profile.name}" already has a manager. Demote them first or remove it from this invite.`
+          )
+        }
+      }
+      out.push({ profile_id: pid, role })
     }
-    return [{ profile_id: profileId, role: preset === 'upwork_manager' ? 'manager' : 'bidder' }]
+    return out
   }
 
   if (preset === 'combined_manager') {
@@ -168,7 +172,7 @@ export async function createInvite(
   const upworkAssignments = await resolveUpworkAssignments(
     teamId,
     parsed.data.preset,
-    parsed.data.profile_id
+    parsed.data.profile_ids
   )
 
   const token = randomBytes(32).toString('hex')

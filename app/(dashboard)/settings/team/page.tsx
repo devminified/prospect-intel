@@ -73,7 +73,7 @@ export default function TeamSettingsPage() {
 
   const [inviteEmail, setInviteEmail] = useState('')
   const [invitePreset, setInvitePreset] = useState<InvitePreset>('outbound_lead_gen')
-  const [inviteProfileId, setInviteProfileId] = useState<string>('')
+  const [inviteProfileIds, setInviteProfileIds] = useState<string[]>([])
   const [newName, setNewName] = useState('')
   const [editingName, setEditingName] = useState(false)
   const [lastRedeemUrl, setLastRedeemUrl] = useState<string | null>(null)
@@ -107,11 +107,11 @@ export default function TeamSettingsPage() {
       const json = await inviteMut.mutateAsync({
         email: inviteEmail.trim(),
         preset: invitePreset,
-        profile_id: inviteProfileId || undefined,
+        profile_ids: inviteProfileIds.length > 0 ? inviteProfileIds : undefined,
       })
       setLastRedeemUrl(json.redeem_url ?? null)
       setInviteEmail('')
-      setInviteProfileId('')
+      setInviteProfileIds([])
     } catch {
       // surfaced via inviteMut.error
     }
@@ -184,7 +184,7 @@ export default function TeamSettingsPage() {
   useEffect(() => {
     if (currentPreset.managerOnly && !isOwnerNow) {
       setInvitePreset('outbound_lead_gen')
-      setInviteProfileId('')
+      setInviteProfileIds([])
     }
   }, [currentPreset.managerOnly, isOwnerNow])
 
@@ -311,7 +311,7 @@ export default function TeamSettingsPage() {
                 onChange={(e) => setInviteEmail(e.target.value)}
                 className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring min-w-[260px]"
               />
-              <Select value={invitePreset} onValueChange={(v) => { if (v) { setInvitePreset(v as InvitePreset); setInviteProfileId('') } }}>
+              <Select value={invitePreset} onValueChange={(v) => { if (v) { setInvitePreset(v as InvitePreset); setInviteProfileIds([]) } }}>
                 <SelectTrigger size="sm" className="min-w-[260px]">
                   <SelectValue />
                 </SelectTrigger>
@@ -336,17 +336,17 @@ export default function TeamSettingsPage() {
                   )}
                 </SelectContent>
               </Select>
-              {currentPreset.needsProfile && (
-                <UpworkProfilePicker
-                  preset={currentPreset.value}
-                  value={inviteProfileId}
-                  onChange={setInviteProfileId}
-                />
-              )}
-              <Button size="sm" onClick={sendInvite} disabled={inviteMut.isPending || !inviteEmail.trim() || (!!currentPreset.needsProfile && !inviteProfileId)}>
+              <Button size="sm" onClick={sendInvite} disabled={inviteMut.isPending || !inviteEmail.trim() || (!!currentPreset.needsProfile && inviteProfileIds.length === 0)}>
                 {inviteMut.isPending ? 'Sending…' : 'Send invite'}
               </Button>
             </div>
+            {currentPreset.needsProfile && (
+              <UpworkProfileMultiPicker
+                preset={currentPreset.value}
+                values={inviteProfileIds}
+                onChange={setInviteProfileIds}
+              />
+            )}
             <p className="text-xs text-muted-foreground">{currentPreset.hint}</p>
             <p className="text-xs text-muted-foreground">
               We email a magic link via Supabase. If your project email isn't configured, copy the redeem URL shown after creating the invite and share it manually.
@@ -498,51 +498,95 @@ function RoleChip({ role }: { role: string }) {
 }
 
 /**
- * Profile picker shown when the invite preset needs one. For
- * `upwork_manager` we filter to profiles that don't already have a
- * manager so the user doesn't pick a profile we'd reject server-side.
- * Profiles list is loaded lazily — picker only mounts when needed.
+ * Multi-select profile picker shown when the invite preset needs one.
+ * For `upwork_manager` profiles that already have a manager are
+ * disabled so the user doesn't pick something we'd reject server-side.
+ * Mounts lazily — only loads profiles when a needs-profile preset is
+ * active.
  */
-function UpworkProfilePicker({
+function UpworkProfileMultiPicker({
   preset,
-  value,
+  values,
   onChange,
 }: {
   preset: InvitePreset
-  value: string
-  onChange: (id: string) => void
+  values: string[]
+  onChange: (ids: string[]) => void
 }) {
   const profilesQ = useUpworkProfiles()
   const profiles = profilesQ.data ?? []
+
+  function toggle(id: string) {
+    onChange(values.includes(id) ? values.filter((v) => v !== id) : [...values, id])
+  }
+
+  if (profilesQ.isLoading) {
+    return <div className="text-xs text-muted-foreground">Loading profiles…</div>
+  }
+  if (profiles.length === 0) {
+    return <div className="text-xs text-muted-foreground">No profiles yet — create one first under /upwork.</div>
+  }
+
   return (
-    <Select value={value} onValueChange={(v) => v && onChange(v)}>
-      <SelectTrigger size="sm" className="min-w-[200px]">
-        <SelectValue placeholder={profilesQ.isLoading ? 'Loading profiles…' : 'Pick a profile'} />
-      </SelectTrigger>
-      <SelectContent>
-        {profiles.length === 0 && !profilesQ.isLoading && (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">No profiles yet — create one first under /upwork.</div>
-        )}
+    <div className="rounded-md border bg-muted/20 p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-medium">
+          {preset === 'upwork_manager' ? 'Assign as manager on:' : 'Assign as bidder on:'}
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {values.length} of {profiles.length} selected
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
         {profiles.map((p) => (
-          <ProfileItem key={p.id} profileId={p.id} name={p.name} preset={preset} />
+          <ProfileCheckbox
+            key={p.id}
+            profileId={p.id}
+            name={p.name}
+            preset={preset}
+            checked={values.includes(p.id)}
+            onToggle={() => toggle(p.id)}
+          />
         ))}
-      </SelectContent>
-    </Select>
+      </div>
+    </div>
   )
 }
 
-function ProfileItem({ profileId, name, preset }: { profileId: string; name: string; preset: InvitePreset }) {
+function ProfileCheckbox({
+  profileId,
+  name,
+  preset,
+  checked,
+  onToggle,
+}: {
+  profileId: string
+  name: string
+  preset: InvitePreset
+  checked: boolean
+  onToggle: () => void
+}) {
   const detailQ = useUpworkProfile(profileId)
   const hasManager = useMemo(
     () => (detailQ.data?.members ?? []).some((m) => m.role === 'manager'),
     [detailQ.data]
   )
-  if (preset === 'upwork_manager' && hasManager) {
-    return (
-      <SelectItem value={profileId} disabled>
-        {name} <span className="text-muted-foreground ml-1">(has manager)</span>
-      </SelectItem>
-    )
-  }
-  return <SelectItem value={profileId}>{name}</SelectItem>
+  const disabled = preset === 'upwork_manager' && hasManager && !checked
+  return (
+    <label
+      className={`flex items-center gap-2 rounded px-2 py-1 text-sm ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-muted/50'}`}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={onToggle}
+        className="h-4 w-4 rounded border-input"
+      />
+      <span>{name}</span>
+      {preset === 'upwork_manager' && hasManager && (
+        <span className="text-xs text-muted-foreground">(has manager)</span>
+      )}
+    </label>
+  )
 }

@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import * as dbTeams from '@/lib/db/teams'
+import * as dbProfiles from '@/lib/db/upwork-profiles'
 import {
   InviteCreateInputSchema,
   InviteRedeemInputSchema,
@@ -8,7 +9,15 @@ import {
   RoleChangeInputSchema,
   TeamRenameInputSchema,
 } from '@/lib/types'
-import type { Role, Team, TeamInvite, TeamMemberWithEmail } from '@/lib/types'
+import type {
+  InvitableRole,
+  InvitePreset,
+  Role,
+  Team,
+  TeamInvite,
+  TeamMemberWithEmail,
+  UpworkAssignment,
+} from '@/lib/types'
 import {
   ConflictError,
   ForbiddenError,
@@ -61,6 +70,76 @@ export async function rename(userId: string, raw: unknown): Promise<void> {
   await dbTeams.rename(teamId, parsed.data.name)
 }
 
+/**
+ * Maps an invite preset to the team-wide role that gets stamped on the
+ * `team_members` row at redeem time. Presets exist so the UI can offer
+ * meaningful grouping (Outbound / Upwork / Combined) instead of forcing
+ * the user to pick a raw role + remember to also click "assign to
+ * profile" afterwards.
+ */
+function presetToTeamRole(preset: InvitePreset): InvitableRole {
+  switch (preset) {
+    case 'outbound_manager':
+    case 'combined_manager':
+      return 'manager'
+    case 'outbound_lead_gen':
+      return 'lead_gen'
+    case 'outbound_cold_caller':
+      return 'cold_caller'
+    case 'outbound_closer':
+      return 'closer'
+    case 'upwork_bidder':
+    case 'upwork_manager':
+      return 'bidder'
+  }
+}
+
+/**
+ * Resolves the snapshot of Upwork profile assignments to attach to the
+ * invite at create time. For combined-manager invites we eagerly snapshot
+ * profiles that currently have NO manager — new profiles created later
+ * are not auto-included, matching the documented column comment.
+ */
+async function resolveUpworkAssignments(
+  teamId: string,
+  preset: InvitePreset,
+  profileId: string | undefined
+): Promise<UpworkAssignment[]> {
+  if (preset === 'upwork_bidder' || preset === 'upwork_manager') {
+    if (!profileId) {
+      throw new ValidationError('Pick an Upwork profile for this invite')
+    }
+    const profile = await dbProfiles.getById(profileId)
+    if (!profile || profile.team_id !== teamId) {
+      throw new NotFoundError('Upwork profile not found in this team')
+    }
+    if (preset === 'upwork_manager') {
+      const existingMembers = await dbProfiles.listMembers(profileId)
+      const existingManager = existingMembers.find((m) => m.role === 'manager')
+      if (existingManager) {
+        throw new ConflictError(
+          'This profile already has a manager. Demote them first or pick another profile.'
+        )
+      }
+    }
+    return [{ profile_id: profileId, role: preset === 'upwork_manager' ? 'manager' : 'bidder' }]
+  }
+
+  if (preset === 'combined_manager') {
+    const profiles = await dbProfiles.listForTeam(teamId)
+    const eligible: UpworkAssignment[] = []
+    for (const p of profiles) {
+      if (p.status !== 'active') continue
+      const members = await dbProfiles.listMembers(p.id)
+      if (members.some((m) => m.role === 'manager')) continue
+      eligible.push({ profile_id: p.id, role: 'manager' })
+    }
+    return eligible
+  }
+
+  return []
+}
+
 export async function createInvite(
   userId: string,
   raw: unknown
@@ -74,15 +153,34 @@ export async function createInvite(
     throw new ValidationError(parsed.error.issues[0]?.message ?? 'Invalid invite', parsed.error.issues)
   }
 
+  // Combined manager and Upwork manager both grant manager-level
+  // authority somewhere — restrict creation to owners. (Outbound
+  // managers can still invite bidders / lead-gen / cold-caller / closer.)
+  const grantsManagerAuthority =
+    parsed.data.preset === 'outbound_manager' ||
+    parsed.data.preset === 'upwork_manager' ||
+    parsed.data.preset === 'combined_manager'
+  if (grantsManagerAuthority && role !== 'owner') {
+    throw new ForbiddenError('Only an owner can invite a manager')
+  }
+
+  const teamRole = presetToTeamRole(parsed.data.preset)
+  const upworkAssignments = await resolveUpworkAssignments(
+    teamId,
+    parsed.data.preset,
+    parsed.data.profile_id
+  )
+
   const token = randomBytes(32).toString('hex')
   let invite: TeamInvite
   try {
     invite = await dbTeams.createInvite({
       teamId,
       email: parsed.data.email,
-      role: parsed.data.role,
+      role: teamRole,
       invitedBy: userId,
       token,
+      upworkAssignments,
     })
   } catch (err: any) {
     if (typeof err?.message === 'string' && err.message.includes('team_invites_pending_email_idx')) {
@@ -94,11 +192,9 @@ export async function createInvite(
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') ?? ''
   const redeemUrl = `${baseUrl}/invite/${token}`
 
-  // Best-effort magic-link dispatch — the redeem URL works even if
-  // SMTP is dodgy, so we never fail the request on a send error.
   try {
     await supabaseAdmin.auth.admin.inviteUserByEmail(parsed.data.email, {
-      data: { invite_token: token, team_id: teamId, role: parsed.data.role },
+      data: { invite_token: token, team_id: teamId, role: teamRole },
       redirectTo: redeemUrl,
     })
   } catch (e: any) {
@@ -145,6 +241,36 @@ export async function redeemInvite(
       role: invite.role,
     })
   }
+
+  // Fan out the snapshot of Upwork profile assignments. Manager-on-
+  // profile entries skip silently if a manager has shown up since the
+  // snapshot — partial unique index would reject the second one anyway,
+  // and the team owner can finish the assignment manually. Bidder
+  // entries skip if the user is already a member of that profile.
+  for (const assignment of invite.upwork_assignments_json) {
+    const existingMembers = await dbProfiles.listMembers(assignment.profile_id)
+    if (existingMembers.some((m) => m.user_id === userId)) continue
+    if (assignment.role === 'manager' && existingMembers.some((m) => m.role === 'manager')) {
+      console.warn(
+        `[invite ${invite.id}] skipping manager fan-out for profile ${assignment.profile_id} — manager already exists`
+      )
+      continue
+    }
+    try {
+      await dbProfiles.addMember({
+        profile_id: assignment.profile_id,
+        user_id: userId,
+        role: assignment.role,
+        invited_by: invite.invited_by,
+      })
+    } catch (err: any) {
+      console.warn(
+        `[invite ${invite.id}] failed to fan out ${assignment.role} on profile ${assignment.profile_id}:`,
+        err?.message ?? err
+      )
+    }
+  }
+
   await dbTeams.markInviteAccepted(invite.id, userId)
   return { team_id: invite.team_id }
 }

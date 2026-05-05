@@ -1,5 +1,8 @@
 import { supabaseAdmin } from '@/lib/supabase/server'
-import type { Role, Team, TeamInvite, TeamMember } from '@/lib/types'
+import type { Role, Team, TeamInvite, TeamMember, UpworkAssignment } from '@/lib/types'
+
+const INVITE_COLS =
+  'id, team_id, email, role, invited_by, token, expires_at, accepted_at, created_at, upwork_assignments_json'
 
 export async function getById(teamId: string): Promise<Team | null> {
   const { data, error } = await supabaseAdmin
@@ -74,7 +77,7 @@ export async function transferOwnership(teamId: string, newOwnerId: string): Pro
 export async function listPendingInvites(teamId: string): Promise<TeamInvite[]> {
   const { data, error } = await supabaseAdmin
     .from('team_invites')
-    .select('id, team_id, email, role, invited_by, token, expires_at, accepted_at, created_at')
+    .select(INVITE_COLS)
     .eq('team_id', teamId)
     .is('accepted_at', null)
     .order('created_at', { ascending: false })
@@ -88,6 +91,7 @@ export async function createInvite(input: {
   role: Role
   invitedBy: string
   token: string
+  upworkAssignments?: UpworkAssignment[]
 }): Promise<TeamInvite> {
   const { data, error } = await supabaseAdmin
     .from('team_invites')
@@ -97,8 +101,9 @@ export async function createInvite(input: {
       role: input.role,
       invited_by: input.invitedBy,
       token: input.token,
+      upwork_assignments_json: input.upworkAssignments ?? [],
     })
-    .select('id, team_id, email, role, invited_by, token, expires_at, accepted_at, created_at')
+    .select(INVITE_COLS)
     .single()
   if (error || !data) throw new Error(`db.teams.createInvite: ${error?.message ?? 'no row returned'}`)
   return data as TeamInvite
@@ -116,7 +121,7 @@ export async function deleteInvite(teamId: string, inviteId: string): Promise<vo
 export async function getInviteByToken(token: string): Promise<TeamInvite | null> {
   const { data, error } = await supabaseAdmin
     .from('team_invites')
-    .select('id, team_id, email, role, invited_by, token, expires_at, accepted_at, created_at')
+    .select(INVITE_COLS)
     .eq('token', token)
     .maybeSingle()
   if (error) throw new Error(`db.teams.getInviteByToken: ${error.message}`)

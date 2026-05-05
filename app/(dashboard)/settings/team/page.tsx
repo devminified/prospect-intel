@@ -1,12 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -18,15 +20,36 @@ import {
   useRenameTeam,
   useRevokeInvite,
 } from '@/lib/queries/team'
+import { useUpworkProfile, useUpworkProfiles } from '@/lib/queries/upwork-profiles'
 import type {
+  InvitePreset,
   TeamMemberWithEmail as Member,
 } from '@/lib/types'
 
-const INVITE_ROLES: Array<{ value: string; label: string }> = [
+// Role select for the in-row "change member role" dropdown — outbound roles only.
+const MEMBER_ROW_ROLES: Array<{ value: string; label: string }> = [
   { value: 'manager', label: 'Manager' },
   { value: 'lead_gen', label: 'Lead generator' },
   { value: 'cold_caller', label: 'Cold caller' },
   { value: 'closer', label: 'Closer' },
+]
+
+interface PresetOption {
+  value: InvitePreset
+  label: string
+  hint: string
+  needsProfile?: boolean
+  managerOnly: true | false
+}
+
+const PRESETS: PresetOption[] = [
+  { value: 'outbound_manager', label: 'Outbound — Manager', hint: 'Full outbound access. Owner-only.', managerOnly: true },
+  { value: 'outbound_lead_gen', label: 'Outbound — Lead generator', hint: 'Builds batches, runs the pipeline.', managerOnly: false },
+  { value: 'outbound_cold_caller', label: 'Outbound — Cold caller', hint: 'Calls assigned leads.', managerOnly: false },
+  { value: 'outbound_closer', label: 'Outbound — Closer', hint: 'Owns the deal pipeline.', managerOnly: false },
+  { value: 'upwork_bidder', label: 'Upwork — Bidder', hint: 'Submits proposals on a single profile.', needsProfile: true, managerOnly: false },
+  { value: 'upwork_manager', label: 'Upwork — Profile manager', hint: 'Manages bidders + Connects on a single profile. Owner-only.', needsProfile: true, managerOnly: true },
+  { value: 'combined_manager', label: 'Combined — Outbound + Upwork manager', hint: 'Outbound manager + manager on every Upwork profile that has no manager (snapshot at invite-create).', managerOnly: true },
 ]
 
 const ROLE_LABEL: Record<string, string> = {
@@ -35,6 +58,7 @@ const ROLE_LABEL: Record<string, string> = {
   lead_gen: 'Lead generator',
   cold_caller: 'Cold caller',
   closer: 'Closer',
+  bidder: 'Bidder',
 }
 
 export default function TeamSettingsPage() {
@@ -48,7 +72,8 @@ export default function TeamSettingsPage() {
   const data = teamQ.data ?? null
 
   const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteRole, setInviteRole] = useState('lead_gen')
+  const [invitePreset, setInvitePreset] = useState<InvitePreset>('outbound_lead_gen')
+  const [inviteProfileId, setInviteProfileId] = useState<string>('')
   const [newName, setNewName] = useState('')
   const [editingName, setEditingName] = useState(false)
   const [lastRedeemUrl, setLastRedeemUrl] = useState<string | null>(null)
@@ -79,9 +104,14 @@ export default function TeamSettingsPage() {
   async function sendInvite() {
     setLastRedeemUrl(null)
     try {
-      const json = await inviteMut.mutateAsync({ email: inviteEmail.trim(), role: inviteRole })
+      const json = await inviteMut.mutateAsync({
+        email: inviteEmail.trim(),
+        preset: invitePreset,
+        profile_id: inviteProfileId || undefined,
+      })
       setLastRedeemUrl(json.redeem_url ?? null)
       setInviteEmail('')
+      setInviteProfileId('')
     } catch {
       // surfaced via inviteMut.error
     }
@@ -142,6 +172,21 @@ export default function TeamSettingsPage() {
       setCopiedAt(new Date().toLocaleTimeString())
     })
   }
+
+  const currentPreset = PRESETS.find((p) => p.value === invitePreset) ?? PRESETS[0]
+  const isOwnerNow = data?.my_role === 'owner'
+  // Filter presets the caller can actually use. Manager can only invite
+  // non-manager outbound roles + upwork bidder; manager-grant presets
+  // are owner-only (matches the service-layer check).
+  const availablePresets = PRESETS.filter((p) => (p.managerOnly ? isOwnerNow : true))
+  // If the caller switched to a manager-only preset and isn't owner,
+  // snap back to a safe default.
+  useEffect(() => {
+    if (currentPreset.managerOnly && !isOwnerNow) {
+      setInvitePreset('outbound_lead_gen')
+      setInviteProfileId('')
+    }
+  }, [currentPreset.managerOnly, isOwnerNow])
 
   if (teamQ.isLoading) return <div className="text-muted-foreground">Loading team…</div>
   if (!data) {
@@ -266,20 +311,43 @@ export default function TeamSettingsPage() {
                 onChange={(e) => setInviteEmail(e.target.value)}
                 className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring min-w-[260px]"
               />
-              <Select value={inviteRole} onValueChange={(v) => v && setInviteRole(v)}>
-                <SelectTrigger size="sm" className="min-w-[180px]">
+              <Select value={invitePreset} onValueChange={(v) => { if (v) { setInvitePreset(v as InvitePreset); setInviteProfileId('') } }}>
+                <SelectTrigger size="sm" className="min-w-[260px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {INVITE_ROLES.map((r) => (
-                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                  ))}
+                  <SelectGroup>
+                    <SelectLabel>Outbound</SelectLabel>
+                    {availablePresets.filter((p) => p.value.startsWith('outbound_')).map((p) => (
+                      <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                  <SelectGroup>
+                    <SelectLabel>Upwork</SelectLabel>
+                    {availablePresets.filter((p) => p.value.startsWith('upwork_')).map((p) => (
+                      <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                  {availablePresets.some((p) => p.value === 'combined_manager') && (
+                    <SelectGroup>
+                      <SelectLabel>Combined</SelectLabel>
+                      <SelectItem value="combined_manager">Outbound + Upwork manager</SelectItem>
+                    </SelectGroup>
+                  )}
                 </SelectContent>
               </Select>
-              <Button size="sm" onClick={sendInvite} disabled={inviteMut.isPending || !inviteEmail.trim()}>
+              {currentPreset.needsProfile && (
+                <UpworkProfilePicker
+                  preset={currentPreset.value}
+                  value={inviteProfileId}
+                  onChange={setInviteProfileId}
+                />
+              )}
+              <Button size="sm" onClick={sendInvite} disabled={inviteMut.isPending || !inviteEmail.trim() || (!!currentPreset.needsProfile && !inviteProfileId)}>
                 {inviteMut.isPending ? 'Sending…' : 'Send invite'}
               </Button>
             </div>
+            <p className="text-xs text-muted-foreground">{currentPreset.hint}</p>
             <p className="text-xs text-muted-foreground">
               We email a magic link via Supabase. If your project email isn't configured, copy the redeem URL shown after creating the invite and share it manually.
             </p>
@@ -396,7 +464,7 @@ function MemberRowActions({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {INVITE_ROLES.map((r) => (
+          {MEMBER_ROW_ROLES.map((r) => (
             <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
           ))}
         </SelectContent>
@@ -420,10 +488,61 @@ function RoleChip({ role }: { role: string }) {
     lead_gen: 'bg-purple-100 text-purple-800',
     cold_caller: 'bg-orange-100 text-orange-800',
     closer: 'bg-emerald-100 text-emerald-800',
+    bidder: 'bg-amber-100 text-amber-800',
   }
   return (
     <span className={`inline-flex px-2 py-0.5 text-xs font-semibold rounded-full ${cls[role] ?? 'bg-secondary text-secondary-foreground'}`}>
       {ROLE_LABEL[role] ?? role}
     </span>
   )
+}
+
+/**
+ * Profile picker shown when the invite preset needs one. For
+ * `upwork_manager` we filter to profiles that don't already have a
+ * manager so the user doesn't pick a profile we'd reject server-side.
+ * Profiles list is loaded lazily — picker only mounts when needed.
+ */
+function UpworkProfilePicker({
+  preset,
+  value,
+  onChange,
+}: {
+  preset: InvitePreset
+  value: string
+  onChange: (id: string) => void
+}) {
+  const profilesQ = useUpworkProfiles()
+  const profiles = profilesQ.data ?? []
+  return (
+    <Select value={value} onValueChange={(v) => v && onChange(v)}>
+      <SelectTrigger size="sm" className="min-w-[200px]">
+        <SelectValue placeholder={profilesQ.isLoading ? 'Loading profiles…' : 'Pick a profile'} />
+      </SelectTrigger>
+      <SelectContent>
+        {profiles.length === 0 && !profilesQ.isLoading && (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">No profiles yet — create one first under /upwork.</div>
+        )}
+        {profiles.map((p) => (
+          <ProfileItem key={p.id} profileId={p.id} name={p.name} preset={preset} />
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+function ProfileItem({ profileId, name, preset }: { profileId: string; name: string; preset: InvitePreset }) {
+  const detailQ = useUpworkProfile(profileId)
+  const hasManager = useMemo(
+    () => (detailQ.data?.members ?? []).some((m) => m.role === 'manager'),
+    [detailQ.data]
+  )
+  if (preset === 'upwork_manager' && hasManager) {
+    return (
+      <SelectItem value={profileId} disabled>
+        {name} <span className="text-muted-foreground ml-1">(has manager)</span>
+      </SelectItem>
+    )
+  }
+  return <SelectItem value={profileId}>{name}</SelectItem>
 }

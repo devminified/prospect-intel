@@ -11,10 +11,20 @@ export const RoleSchema = z.enum([
 export type Role = z.infer<typeof RoleSchema>
 
 /**
- * Roles that can be invited via the magic-link flow. 'owner' is excluded
- * because there's exactly one per team and it's set at team creation.
+ * Roles that can be invited via the magic-link flow. `owner` is excluded
+ * because the team can have at most 2 owners and they're either set at
+ * creation or promoted from an existing member via /settings/team. The
+ * `bidder` role IS invitable — for pure Upwork-only contributors who
+ * shouldn't see any outbound surface; assign them to a profile via
+ * /upwork/profiles/[id] after they redeem.
  */
-export const InvitableRoleSchema = z.enum(['manager', 'lead_gen', 'cold_caller', 'closer'])
+export const InvitableRoleSchema = z.enum([
+  'manager',
+  'lead_gen',
+  'cold_caller',
+  'closer',
+  'bidder',
+])
 export type InvitableRole = z.infer<typeof InvitableRoleSchema>
 
 export const TeamSchema = z.object({
@@ -40,6 +50,19 @@ export const TeamMemberWithEmailSchema = TeamMemberSchema.extend({
 })
 export type TeamMemberWithEmail = z.infer<typeof TeamMemberWithEmailSchema>
 
+/**
+ * Per-profile assignment that fans out on redeem (M88). The invite row
+ * stores an array of these in `upwork_assignments_json`. Empty array =
+ * pure outbound invite. Snapshot is taken at invite-create time —
+ * profiles added afterwards are NOT auto-included even for the
+ * "Combined manager" preset.
+ */
+export const UpworkAssignmentSchema = z.object({
+  profile_id: z.string().uuid(),
+  role: z.enum(['manager', 'bidder']),
+})
+export type UpworkAssignment = z.infer<typeof UpworkAssignmentSchema>
+
 export const TeamInviteSchema = z.object({
   id: z.string().uuid(),
   team_id: z.string().uuid(),
@@ -51,6 +74,7 @@ export const TeamInviteSchema = z.object({
   accepted_at: z.string().nullable(),
   accepted_by: z.string().uuid().nullable().optional(),
   created_at: z.string(),
+  upwork_assignments_json: z.array(UpworkAssignmentSchema).default([]),
 })
 export type TeamInvite = z.infer<typeof TeamInviteSchema>
 
@@ -59,14 +83,53 @@ export const TeamRenameInputSchema = z.object({
 })
 export type TeamRenameInput = z.infer<typeof TeamRenameInputSchema>
 
-export const InviteCreateInputSchema = z.object({
-  email: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Valid email required'),
-  role: InvitableRoleSchema,
-})
+/**
+ * Invite presets (M88/M89). The UI picks one of these instead of a raw
+ * role; the service layer derives both the team-wide role and the
+ * Upwork profile assignments from the preset.
+ *
+ * | Preset             | team_role  | Upwork assignments                                      |
+ * | ------------------ | ---------- | ------------------------------------------------------- |
+ * | outbound_manager   | manager    | none                                                    |
+ * | outbound_lead_gen  | lead_gen   | none                                                    |
+ * | outbound_cold_caller | cold_caller | none                                                  |
+ * | outbound_closer    | closer     | none                                                    |
+ * | upwork_bidder      | bidder     | bidder on the picked profile                            |
+ * | upwork_manager     | bidder     | manager on the picked profile (must have no manager)    |
+ * | combined_manager   | manager    | manager on every active profile that has no manager yet |
+ */
+export const InvitePresetSchema = z.enum([
+  'outbound_manager',
+  'outbound_lead_gen',
+  'outbound_cold_caller',
+  'outbound_closer',
+  'upwork_bidder',
+  'upwork_manager',
+  'combined_manager',
+])
+export type InvitePreset = z.infer<typeof InvitePresetSchema>
+
+export const InviteCreateInputSchema = z
+  .object({
+    email: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Valid email required'),
+    preset: InvitePresetSchema,
+    /** Required for `upwork_bidder` and `upwork_manager` presets only. */
+    profile_id: z.string().uuid().optional(),
+  })
+  .superRefine((val: { preset: InvitePreset; profile_id?: string }, ctx: z.RefinementCtx) => {
+    const needsProfile = val.preset === 'upwork_bidder' || val.preset === 'upwork_manager'
+    if (needsProfile && !val.profile_id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['profile_id'],
+        message: 'Pick an Upwork profile for this invite',
+      })
+    }
+  })
 export type InviteCreateInput = z.infer<typeof InviteCreateInputSchema>
 
 export const InviteRedeemInputSchema = z.object({

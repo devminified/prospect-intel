@@ -2,7 +2,12 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiDelete, apiGet, apiPatch, apiPost } from '@/lib/api-client'
-import type { CreateInviteResponse, TeamProgressResponse, TeamView } from '@/lib/types'
+import type {
+  CreateInviteResponse,
+  InviteCreateInput,
+  TeamProgressResponse,
+  TeamView,
+} from '@/lib/types'
 import { queryKeys } from './keys'
 
 export function useCurrentTeam() {
@@ -41,7 +46,7 @@ export function useRenameTeam() {
 
 export function useCreateInvite() {
   const qc = useQueryClient()
-  return useMutation<CreateInviteResponse, Error, { email: string; role: string }>({
+  return useMutation<CreateInviteResponse, Error, InviteCreateInput>({
     mutationFn: (input) => apiPost<CreateInviteResponse>('/api/team/invites', input),
     onSuccess: invalidateTeam(qc),
   })

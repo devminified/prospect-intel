@@ -135,7 +135,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     await supabase.auth.signOut()
   }
 
-  if (loading) {
+  // Hold the shell until role + upwork access have settled. Without
+  // this the page paints with default route (e.g. /dashboard), the
+  // pure-bidder redirect fires once `upworkAccessQ` resolves, and the
+  // user sees a flash → bounce to /upwork. Both queries have a 60s
+  // staleTime, so this only adds a loader on first mount per session.
+  const rolesSettled = !teamQ.isPending && !upworkAccessQ.isPending
+  // The pure-bidder redirect runs in a useEffect, which fires AFTER the
+  // first render with settled data. Stay on the loader while the
+  // redirect is imminent so children never paint on the wrong route.
+  const pureBidderRedirectPending =
+    !!upworkAccess?.is_pure_upwork &&
+    !pathname.startsWith('/upwork') &&
+    !pathname.startsWith('/no-team')
+  if (loading || (user && (!rolesSettled || pureBidderRedirectPending))) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <p className="text-muted-foreground">Loading…</p>
